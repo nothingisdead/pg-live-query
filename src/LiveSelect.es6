@@ -150,7 +150,7 @@ class LiveSelect extends EventEmitter {
     // Handle added/changed rows
     rows.forEach((newRow) => {
       var id     = newRow._id;
-      var oldRow = this.cache.get(true, id);
+      var oldRow = this.cache.get(id, true);
 
       if(oldRow) {
         // If this row existed in the result set,
@@ -179,7 +179,7 @@ class LiveSelect extends EventEmitter {
     // TODO: remove columns that are not in the original
     // query from the published rows. (Perhaps keeping _id?)
     // https://git.focus-sis.com/beng/pg-notify-trigger/issues/1
-    var existingIds = _.keys(this.cache.get(true));
+    var existingIds = _.keys(this.cache.getAll(true));
 
     if(existingIds.length) {
       var sql = `
@@ -201,7 +201,7 @@ class LiveSelect extends EventEmitter {
         if(error) return this.emit('error', error);
 
         result.rows.forEach((row) => {
-          var oldRow = this.cache.get(true, row.id);
+          var oldRow = this.cache.get(row.id, true);
 
           diff.push(['removed', oldRow]);
           this.cache.remove(row.id);
@@ -209,13 +209,13 @@ class LiveSelect extends EventEmitter {
 
         if(diff.length !== 0){
           // Output all difference events in a single event
-          this.emit('update', diff, this.cache.get.bind(this.cache, true));
+          this.emit('update', diff, this.cache.getAll.bind(this.cache));
         }
       });
     }
     else if(diff.length !== 0){
       // Output all difference events in a single event
-      this.emit('update', diff, this.cache.get.bind(this.cache, true));
+      this.emit('update', diff, this.cache.getAll.bind(this.cache));
     }
   }
 

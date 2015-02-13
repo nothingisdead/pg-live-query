@@ -55,31 +55,35 @@ class RowCache {
 		return null;
 	}
 
-	get(byRef, objKey) {
-		var results = {};
+	removeAll() {
+		var queryCache = cache[this.hashes.query] || {};
 
-		if(cache[this.hashes.query]) {
-			var queryCache = cache[this.hashes.query];
+		_.keys(queryCache).forEach(key => this.remove(key));
+	}
 
-			if(objKey) {
-				if(queryCache[objKey]) {
-					var objCache = queryCache[objKey];
+	get(objKey, byRef) {
+		var queryCache = cache[this.hashes.query] || {};
 
-					if(objCache.deps[this.hashes.params]) {
-						return byRef ? objCache.obj : _.clone(objCache.obj);
-					}
-				}
+		if(queryCache[objKey]) {
+			var objCache = queryCache[objKey];
 
-				return null;
+			if(objCache.deps[this.hashes.params]) {
+				return byRef ? objCache.obj : _.clone(objCache.obj);
 			}
-			else {
-				for(var key in queryCache) {
-					var objCache = queryCache[key];
+		}
 
-					if(queryCache[key].deps[this.hashes.params]) {
-						results[key] = byRef ? objCache.obj : _.clone(objCache.obj);
-					}
-				}
+		return null;
+	}
+
+	getAll(byRef) {
+		var results    = {};
+		var queryCache = cache[this.hashes.query] || {};
+
+		for(var key in queryCache) {
+			var objCache = queryCache[key];
+
+			if(queryCache[key].deps[this.hashes.params]) {
+				results[key] = byRef ? objCache.obj : _.clone(objCache.obj);
 			}
 		}
 
