@@ -10,6 +10,8 @@ This node.js package/sample application provides notifications on row changes.
 
 4. Then run `npm run make-start` to build the ES6 files and start the app at index.js.
 
+* Configure test suite connection string in `package.json`, then run the suite with `npm test`.
+
 ## PgTriggers Class
 
 ### constructor(conn, channel)

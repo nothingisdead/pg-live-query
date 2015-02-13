@@ -6,6 +6,8 @@ var murmurHash = require('../dist/murmurhash3_gc');
 var getFunctionArgumentNames = require('./getFunctionArgumentNames');
 var querySequence = require('./querySequence');
 
+const THROTTLE_INTERVAL = 1000;
+
 class LiveSelect extends EventEmitter {
   constructor(parent, query, triggers) {
     var { conn, channel } = parent;
@@ -15,10 +17,12 @@ class LiveSelect extends EventEmitter {
     this.conn = conn;
     this.data = [];
     this.ready = false;
+    // throttledRefresh method buffers
+    this.lastUpdate = 0;
+    this.refreshQueue = false;
+    this.currentTimeout = null;
 
     this.viewName = `${channel}_${murmurHash(query)}`;
-
-    this.throttledRefresh = _.debounce(this.refresh, 1000, { leading: true });
 
     this.triggerHandlers = _.map(triggers, (handler, table) => 
       parent.createTrigger(table, getFunctionArgumentNames(handler)));
@@ -70,34 +74,40 @@ class LiveSelect extends EventEmitter {
     });
 
   }
-  refresh(condition) {
+  refresh(conditions) {
     // Build WHERE clause if not refreshing entire result set
-    var values, where;
-    if(condition !== true) {
+    var values = [], where;
+    if(conditions instanceof Array) {
       var valueCount = 0;
-      values = _.values(condition);
       where = 'WHERE ' +
-        _.keys(condition)
-          .map((key, index) => `${key} = $${index + 1}`)
-          .join(' AND ');
-    }else{
-      values = [];
+        conditions.map((condition) => '(' +
+          _.map(condition, (value, column) => {
+            values.push(value);
+            return `${column} = $${++valueCount}`
+          }).join(' AND ') + ')'
+        ).join(' OR ');
+    }else if(conditions === true){
       where  = '';
+    }else{
+      return; // Do nothing if falsey
     }
 
     this.conn.query(`SELECT * FROM ${this.viewName} ${where}`, values,
       (error, results) => {
         if(error) return this.emit('error', error);
         var rows;
-        if(condition !== true) {
+        if(conditions !== true) {
           // Do nothing if no change
           if(results.rows.length === 0) return;
-          // Partial refresh, copy rows from current data
-          rows = this.data.slice();
-          _.forOwn(condition, (value, key) => {
-            // Only keep rows that do not match the condition value on key
-            rows = rows.filter(row => row[key] !== value);
-          });
+          // Partial refresh: copy rows from current data, and
+          //  filtering those that are being updated
+          rows = this.data.filter(row =>
+            conditions
+              .map(condition =>
+                _.map(condition, (value, column) => row[column] === value)
+                  .indexOf(false) !== -1)
+              .indexOf(false) === -1
+          );
           // Append new data
           rows = rows.concat(results.rows);
         }else{
@@ -129,6 +139,31 @@ class LiveSelect extends EventEmitter {
         this.emit('update', rows);
       }
     );
+  }
+  throttledRefresh(condition) {
+    var now = Date.now();
+    // Update queue condition
+    if(condition === true){
+      // Refreshing entire result set takes precedence
+      this.refreshQueue = true;
+    }else if(this.refreshQueue !== true && typeof condition === 'object'){
+      if(!(this.refreshQueue instanceof Array)){
+        this.refreshQueue = [];
+      }
+      this.refreshQueue.push(condition);
+    }
+    // else if condition undefined or false, leave queue alone
+
+    if(this.currentTimeout === null){
+      this.currentTimeout = setTimeout(() => {
+        if(this.refreshQueue){
+          this.refresh(this.refreshQueue);
+          this.refreshQueue   = false;
+          this.lastUpdate     = now;
+          this.currentTimeout = null;
+        }
+      }, this.lastUpdate + THROTTLE_INTERVAL < now ? 0 : THROTTLE_INTERVAL);
+    }
   }
 }
 

@@ -1,3 +1,6 @@
+/**
+ * Example application
+ */
 var EventEmitter = require('events').EventEmitter;
 var anyDB        = require('any-db');
 
@@ -54,9 +57,9 @@ class liveClassScores extends EventEmitter {
           class_id === classId ? { assignment_id : id } : false,
         students: (id) =>
           studentIds.indexOf(id) !== -1 ? { student_id : id } : false,
-        scores: (assignment_id) =>
+        scores: (assignment_id, student_id) =>
           assignmentIds.indexOf(assignment_id) !== -1 ?
-            { assignment_id } : false
+            { assignment_id, student_id } : false
       });
 
       mySelect.on('update', (results) => {
