@@ -1,3 +1,4 @@
+var RowCache     = require('./RowCache');
 var EventEmitter = require('events').EventEmitter;
 var _            = require('lodash');
 
@@ -14,8 +15,8 @@ class LiveSelect extends EventEmitter {
 
     this.params = params;
     this.client = client;
-    this.data   = {};
     this.ready  = false;
+    this.cache  = new RowCache(query, params);
 
     // throttledRefresh method buffers
     this.refreshQueue     = [];
@@ -147,29 +148,30 @@ class LiveSelect extends EventEmitter {
     var diff = [];
 
     // Handle added/changed rows
-    rows.forEach((row) => {
-      var id = row._id;
+    rows.forEach((newRow) => {
+      var id     = newRow._id;
+      var oldRow = this.cache.get(true, id);
 
-      if(this.data[id]) {
+      if(oldRow) {
         // If this row existed in the result set,
         // check to see if anything has changed
         var hasDiff = false;
 
-        for(var col in this.data[id]) {
-          if(this.data[id][col] !== row[col]) {
+        for(var col in oldRow) {
+          if(oldRow[col] !== newRow[col]) {
             hasDiff = true;
             break;
           }
         }
 
-        hasDiff && diff.push(['changed', this.data[id], row]);
+        hasDiff && diff.push(['changed', oldRow, newRow]);
       }
       else {
         // Otherwise, it was added
-        diff.push(['added', row]);
+        diff.push(['added', newRow]);
       }
 
-      this.data[id] = row;
+      this.cache.add(id, newRow);
     });
 
     // Check to see if there are any
@@ -177,13 +179,13 @@ class LiveSelect extends EventEmitter {
     // TODO: remove columns that are not in the original
     // query from the published rows. (Perhaps keeping _id?)
     // https://git.focus-sis.com/beng/pg-notify-trigger/issues/1
-    var existingIds = _.keys(this.data);
+    var existingIds = _.keys(this.cache.get(true));
 
     if(existingIds.length) {
       var sql = `
         WITH tmp AS (${this.query})
         SELECT id
-        FROM UNNEST(ARRAY['${_.keys(this.data).join("', '")}']) id
+        FROM UNNEST(ARRAY['${existingIds.join("', '")}']) id
         LEFT JOIN tmp ON tmp._id = id
         WHERE tmp._id IS NULL
       `;
@@ -199,21 +201,21 @@ class LiveSelect extends EventEmitter {
         if(error) return this.emit('error', error);
 
         result.rows.forEach((row) => {
-          var oldRow = this.data[row.id];
+          var oldRow = this.cache.get(true, row.id);
 
           diff.push(['removed', oldRow]);
-          delete this.data[row.id];
+          this.cache.remove(row.id);
         });
 
         if(diff.length !== 0){
           // Output all difference events in a single event
-          this.emit('update', diff, this.data);
+          this.emit('update', diff, this.cache.get.bind(this.cache, true));
         }
       });
     }
     else if(diff.length !== 0){
       // Output all difference events in a single event
-      this.emit('update', diff, this.data);
+      this.emit('update', diff, this.cache.get.bind(this.cache, true));
     }
   }
 
