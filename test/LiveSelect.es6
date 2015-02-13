@@ -65,11 +65,11 @@ exports.scoresLoad = function(test) {
         updateStudentNames();
       });
 
-      select.on('update', (diff, rows) => {
+      select.on('update', (diff, getAll) => {
         switch(curStage){
           case 0:
             readyCount++;
-            initialData[select.params[0] - 1] = _.values(rows);
+            initialData[select.params[0] - 1] = _.values(getAll());
 
             if(readyCount === liveSelects.length){
               printDebug && console.log('INITIAL DATA\n', initialData);
@@ -83,7 +83,7 @@ exports.scoresLoad = function(test) {
             break;
           case 1:
             readyCount++;
-            test.ok(_.values(rows)
+            test.ok(_.values(getAll())
               .map(row => row.student_name === newStudentNames[row.student_id - 1])
               .indexOf(false) === -1, 'Student name update check');
 
@@ -95,7 +95,7 @@ exports.scoresLoad = function(test) {
             }
             break;
           case 2:
-            if(_.values(rows)
+            if(_.values(getAll())
                 .map(row =>
                   row.score === fixtureData.scores[row.score_id - 1].score * 2)
                 .indexOf(false) === -1){
