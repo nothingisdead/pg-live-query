@@ -5,14 +5,25 @@ var murmurHash    = require('../dist/murmurhash3_gc');
 var querySequence = require('./querySequence');
 var cachedQueries = {};
 
+// Minimum duration in milliseconds between refreshing results
+// TODO: determine based on load
+//  https://git.focus-sis.com/beng/pg-notify-trigger/issues/6
 const THROTTLE_INTERVAL = 200;
+// Number of potential refresh conditions before ignoring THROTTLE_INTERVAL
+//  and refreshing immediately in order to avoid call stack overrun
 const MAX_CONDITIONS    = 3500;
+// Specify prefix for aliased columns in result set to a string that
+//  starts with underscore or letter and is unique from any column prefix
+//  existing in the schema
+const ALIAS_PREFIX      = '_0';
+// Specify "_id" meta column to avoid conflicts
+const ID_ALIAS      = '_id';
 
 class LiveSelect extends EventEmitter {
   constructor(parent, query, params) {
     var { client, channel } = parent;
 
-    this.params = params;
+    this.params = params || [];
     this.client = client;
     this.data   = {};
     this.ready  = false;
@@ -148,7 +159,7 @@ class LiveSelect extends EventEmitter {
 
     // Handle added/changed rows
     rows.forEach((row) => {
-      var id = row._id;
+      var id = row[ID_ALIAS];
 
       if(this.data[id]) {
         // If this row existed in the result set,
@@ -162,11 +173,15 @@ class LiveSelect extends EventEmitter {
           }
         }
 
-        hasDiff && diff.push(['changed', this.data[id], row]);
+        hasDiff && diff.push([
+          'changed',
+          filterAliasedProperties(this.data[id]),
+          filterAliasedProperties(row)
+        ]);
       }
       else {
         // Otherwise, it was added
-        diff.push(['added', row]);
+        diff.push(['added', filterAliasedProperties(row)]);
       }
 
       this.data[id] = row;
@@ -174,9 +189,6 @@ class LiveSelect extends EventEmitter {
 
     // Check to see if there are any
     // IDs that have been removed
-    // TODO: remove columns that are not in the original
-    // query from the published rows. (Perhaps keeping _id?)
-    // https://git.focus-sis.com/beng/pg-notify-trigger/issues/1
     var existingIds = _.keys(this.data);
 
     if(existingIds.length) {
@@ -184,8 +196,8 @@ class LiveSelect extends EventEmitter {
         WITH tmp AS (${this.query})
         SELECT id
         FROM UNNEST(ARRAY['${_.keys(this.data).join("', '")}']) id
-        LEFT JOIN tmp ON tmp._id = id
-        WHERE tmp._id IS NULL
+        LEFT JOIN tmp ON tmp.${ID_ALIAS} = id
+        WHERE tmp.${ID_ALIAS} IS NULL
       `;
 
       var query = {
@@ -201,19 +213,19 @@ class LiveSelect extends EventEmitter {
         result.rows.forEach((row) => {
           var oldRow = this.data[row.id];
 
-          diff.push(['removed', oldRow]);
+          diff.push(['removed', filterAliasedProperties(oldRow)]);
           delete this.data[row.id];
         });
 
         if(diff.length !== 0){
           // Output all difference events in a single event
-          this.emit('update', diff, this.data);
+          this.emit('update', diff, dataToRows(this.data));
         }
       });
     }
     else if(diff.length !== 0){
       // Output all difference events in a single event
-      this.emit('update', diff, this.data);
+      this.emit('update', diff, dataToRows(this.data));
     }
   }
 
@@ -223,6 +235,15 @@ class LiveSelect extends EventEmitter {
       this.refreshQueue = [];
     }
   }
+}
+
+function filterAliasedProperties(row) {
+  return _.pick(row, (value, key) =>
+    key.substr(0, ALIAS_PREFIX.length + 1) !== ALIAS_PREFIX + '_')
+}
+
+function dataToRows(data) {
+  return _.map(data, row => filterAliasedProperties(row))
 }
 
 /**
@@ -308,13 +329,14 @@ function addHelpers(query, callback) {
     });
 
     // This might not be completely reliable
-    var pattern = /SELECT([\s\S]+)FROM/;
+    // Will match until last FROM, allowing subqueries in column selectors
+    var pattern = /SELECT([\s\S]+)FROM/i;
 
     columnUsage.forEach((row, index) => {
       columns.push({
         table : row.table_name,
         name  : row.column_name,
-        alias : `_${row.table_name}_${row.column_name}`
+        alias : `${ALIAS_PREFIX}_${row.table_name}_${row.column_name}`
       });
     });
 
@@ -326,7 +348,7 @@ function addHelpers(query, callback) {
 
     query = query.replace(pattern, `
       SELECT
-        CONCAT(${keySql.join(", '|', ")}) AS _id,
+        CONCAT(${keySql.join(", '|', ")}) AS ${ID_ALIAS},
         ${columnSql},
         $1
       FROM

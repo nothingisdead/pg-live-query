@@ -7,7 +7,7 @@ var scoresLoadFixture = require('./fixtures/scoresLoad');
 
 exports.scoresLoad = function(test) {
   var classCount =
-    process.env.CLASS_COUNT ? parseInt(process.env.CLASS_COUNT) : 10;
+    process.env.CLASS_COUNT ? parseInt(process.env.CLASS_COUNT) : 1;
   var fixtureData = scoresLoadFixture.generate(
     classCount, // number of classes
     40, // assignments per class
@@ -29,7 +29,24 @@ exports.scoresLoad = function(test) {
     if(error) throw error;
 
     var liveSelects = _.range(classCount).map(index =>
-      scoresLoadFixture.createSelect(triggers, index + 1));
+      triggers.select(`
+        SELECT
+          students.name  AS student_name,
+          students.id    AS student_id,
+          assignments.id AS assignment_id,
+          scores.id      AS score_id,
+          assignments.name,
+          assignments.value,
+          scores.score
+        FROM
+          scores
+        INNER JOIN assignments ON
+          (assignments.id = scores.assignment_id)
+        INNER JOIN students ON
+          (students.id = scores.student_id)
+        WHERE
+          assignments.class_id = $1
+      `, [ index + 1 ]));
     var curStage = 0;
 
     // Stage 0 : cache initial data
