@@ -12,17 +12,20 @@ var cachedQueryTables = {};
 // https://git.focus-sis.com/beng/pg-notify-trigger/issues/6
 const THROTTLE_INTERVAL = 1000;
 
+var c = 0;
+
 class LiveSelect extends EventEmitter {
 	constructor(parent, query, params) {
 		var { connect, channel, rowCache } = parent;
 
-		this.query    = query;
-		this.params   = params || [];
-		this.connect  = connect;
-		this.rowCache = rowCache;
-		this.data     = [];
-		this.hashes   = [];
-		this.ready    = false;
+		this.query     = query;
+		this.params    = params || [];
+		this.connect   = connect;
+		this.rowCache  = rowCache;
+		this.data      = [];
+		this.hashes    = [];
+		this.ready     = false;
+		this.queryHash = murmurHash(query);
 
 		// throttledRefresh method buffers
 		this.throttledRefresh = _.debounce(this.refresh, THROTTLE_INTERVAL);
@@ -30,8 +33,10 @@ class LiveSelect extends EventEmitter {
 		this.connect((error, client, done) => {
 			if(error) return this.emit('error', error);
 
-			getQueryTables(client, this.query, (error, tables) => {
+			init.call(this, client, (error, tables) => {
 				if(error) return this.emit('error', error);
+
+				done();
 
 				this.triggers = tables.map(table => parent.createTrigger(table));
 
@@ -48,8 +53,6 @@ class LiveSelect extends EventEmitter {
 						trigger.on('change', this.throttledRefresh.bind(this));
 					});
 				});
-
-				done();
 			});
 		});
 
@@ -172,6 +175,8 @@ class LiveSelect extends EventEmitter {
 	}
 
 	update(changes) {
+		console.log('Update Count: ', ++c);
+
 		var remove = [];
 
 		// Emit an update event with the changes
@@ -217,33 +222,45 @@ class LiveSelect extends EventEmitter {
 	}
 }
 
-function getQueryTables(client, query, callback){
-	var queryHash = murmurHash(query);
+function init(client, callback){
+	var { query, queryHash } = this;
 
 	// If this query was cached before, reuse it
-	if(cachedQueryTables[queryHash]) {
-		return callback(null, cachedQueryTables[queryHash]);
+	if(!cachedQueryTables[queryHash]) {
+		cachedQueryTables[queryHash] = new Promise((resolve, reject) => {
+			// Replace all parameter values with NULL
+			var tmpQuery = query.replace(/\$\d/g, 'NULL');
+			var tmpName  = `tmp_view_${queryHash}`;
+
+			var sql = [
+				`CREATE OR REPLACE TEMP VIEW ${tmpName} AS (${tmpQuery})`,
+				[`SELECT DISTINCT vc.table_name
+					FROM information_schema.view_column_usage vc
+					WHERE view_name = $1`, [ tmpName ] ],
+				[`INSERT INTO _liveselect_queries (id, query)
+					VALUES ($1, $2)`, [queryHash, query] ],
+				[`INSERT INTO _liveselect_column_usage
+						(query_id, table_schema, table_name, column_name)
+					SELECT $1, vc.table_schema, vc.table_name, vc.column_name
+					FROM information_schema.view_column_usage vc
+					WHERE vc.view_name = $2`, [ queryHash, tmpName ] ]
+			];
+
+			querySequence(client, sql, (error, result) => {
+				console.log(error);
+				if(error) return reject(error);
+
+				var tables = result[1].rows.map(row => row.table_name);
+
+				resolve(tables);
+			});
+		});
 	}
 
-	// Replace all parameter values with NULL
-	var tmpQuery = query.replace(/\$\d/g, 'NULL');
-	var tmpName  = `tmp_view_${queryHash}`;
-
-	var sql = [
-		`CREATE OR REPLACE TEMP VIEW ${tmpName} AS (${tmpQuery})`,
-		[`SELECT DISTINCT vc.table_name
-			FROM information_schema.view_column_usage vc
-			WHERE view_name = $1`, [ tmpName ] ],
-	];
-
-	querySequence(client, sql, (error, result) => {
-		if(error) return callback(error);
-
-		var tables = result[1].rows.map(row => row.table_name);
-
-		cachedQueryTables[queryHash] = tables;
-
-		callback(null, tables);
+	cachedQueryTables[queryHash].then((result) => {
+		callback(null, result);
+	}, (error) => {
+		callback(error, null);
 	});
 }
 

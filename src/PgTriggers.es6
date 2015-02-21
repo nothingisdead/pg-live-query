@@ -15,20 +15,8 @@ class PgTriggers extends EventEmitter {
 
 		this.setMaxListeners(0); // Allow unlimited listeners
 
-		// Reserve one client to listen for notifications
-		this.getClient((error, client, done) => {
-			if(error) return this.emit('error', error);
-
-			client.query(`LISTEN "${channel}"`, function(error, result) {
-				if(error) throw error;
-			});
-
-			client.on('notification', (info) => {
-				if(info.channel === channel) {
-					this.emit(`change:${info.payload}`);
-				}
-			});
-		});
+		listen.call(this);
+		createTables.call(this);
 	}
 
 	getClient(cb) {
@@ -71,12 +59,62 @@ class PgTriggers extends EventEmitter {
 			});
 
 			querySequence(client, queries, (error, result) => {
+				if(error) return this.emit('error', error);
+
 				done();
-				callback(error, result);
+
+				if(_.isFunction(callback)) {
+					callback(null, result);
+				}
 			});
 		});
 	}
 }
 
-module.exports = PgTriggers;
+function listen(callback) {
+	this.getClient((error, client, done) => {
+		if(error) return this.emit('error', error);
 
+		client.query(`LISTEN "${this.channel}"`, function(error, result) {
+				if(error) throw error;
+			});
+
+			client.on('notification', (info) => {
+				if(info.channel === this.channel) {
+					this.emit(`change:${info.payload}`);
+				}
+			});
+	});
+}
+
+function createTables(callback) {
+	var sql = [
+		`CREATE TABLE IF NOT EXISTS _liveselect_queries (
+			id BIGINT PRIMARY KEY,
+			query TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS _liveselect_column_usage (
+			id SERIAL PRIMARY KEY,
+			query_id BIGINT,
+			table_schema VARCHAR(255),
+			table_name VARCHAR(255),
+			column_name VARCHAR(255)
+		)`,
+		`TRUNCATE TABLE _liveselect_queries`,
+		`TRUNCATE TABLE _liveselect_column_usage`
+	];
+
+	this.getClient((error, client, done) => {
+		if(error) return this.emit('error', error);
+
+		querySequence(client, sql, (error, result) => {
+			if(error) return this.emit('error', error);
+
+			if(_.isFunction(callback)) {
+				callback(null, result);
+			}
+		});
+	});
+}
+
+module.exports = PgTriggers;
