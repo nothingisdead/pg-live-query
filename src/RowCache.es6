@@ -5,21 +5,22 @@ class RowCache {
 		this.cache = {};
 	}
 
-	add(key, data) {
+	add(key) {
 		var { cache } = this;
+
 		if(!(key in cache)) {
 			cache[key] = {
-				data : {},
+				data : null,
 				refs : 0
 			}
 		}
 
-		cache[key].data = data;
 		cache[key].refs++;
 	}
 
 	remove(key) {
 		var { cache } = this;
+
 		if(key in cache) {
 			cache[key].refs--;
 
@@ -29,8 +30,22 @@ class RowCache {
 		}
 	}
 
+	set(key, data) {
+		var { cache } = this;
+
+		if(!(key in cache)) {
+			cache[key] = {
+				data : null,
+				refs : 0
+			}
+		}
+
+		cache[key].data = data;
+	}
+
 	get(key) {
 		var { cache } = this;
+
 		return key in cache ? _.clone(cache[key].data) : null;
 	}
 }

@@ -5,30 +5,31 @@ var EventEmitter = require('events').EventEmitter;
 var murmurHash    = require('murmurhash-js').murmur3;
 var querySequence = require('./querySequence');
 
-var cachedQueryTables = {};
-
 // Minimum duration in milliseconds between refreshing results
 // TODO: determine based on load
 // https://git.focus-sis.com/beng/pg-notify-trigger/issues/6
-const THROTTLE_INTERVAL = 1000;
-
-var c = 0;
+const THROTTLE_INTERVAL = 250;
 
 class LiveSelect extends EventEmitter {
 	constructor(parent, query, params) {
 		var { connect, channel, rowCache } = parent;
 
-		this.query     = query;
-		this.params    = params || [];
-		this.connect   = connect;
-		this.rowCache  = rowCache;
-		this.data      = [];
-		this.hashes    = [];
-		this.ready     = false;
-		this.queryHash = murmurHash(query);
+		this.query       = query;
+		this.params      = params || [];
+		this.connect     = connect;
+		this.rowCache    = rowCache;
+		this.data        = [];
+		this.hashes      = [];
+		this.ready       = false;
+		this.staticQuery = interpolate(query, params);
+		this.queryHash   = murmurHash(this.query);
+		this.staticHash  = murmurHash(this.staticQuery);
+		this.parent      = parent;
 
 		// throttledRefresh method buffers
-		this.throttledRefresh = _.debounce(this.refresh, THROTTLE_INTERVAL);
+		this.throttledRefresh = _.debounce(this.refresh, THROTTLE_INTERVAL).bind(this);
+
+		parent.on(`change:${this.staticHash}`, this.throttledRefresh);
 
 		this.connect((error, client, done) => {
 			if(error) return this.emit('error', error);
@@ -49,8 +50,6 @@ class LiveSelect extends EventEmitter {
 							this.ready = true;
 							this.emit('ready');
 						}
-
-						trigger.on('change', this.throttledRefresh.bind(this));
 					});
 				});
 			});
@@ -63,17 +62,10 @@ class LiveSelect extends EventEmitter {
 	refresh() {
 		// Run a query to get an updated hash map
 		var sql = `
-			WITH
-				tmp AS (${this.query})
 			SELECT
-				tmp2._hash
+				MD5(CAST(tmp.* AS TEXT)) AS _hash
 			FROM
-				(
-					SELECT
-						MD5(CAST(tmp.* AS TEXT)) AS _hash
-					FROM
-						tmp
-				) tmp2
+				(${this.query}) tmp
 		`;
 
 		this.connect((error, client, done) => {
@@ -165,7 +157,7 @@ class LiveSelect extends EventEmitter {
 					client.query(sql, this.params, (error, result) => {
 						if(error) return this.emit('error', error);
 
-						result.rows.forEach(row => this.rowCache.add(row._hash, row));
+						result.rows.forEach(row => this.rowCache.set(row._hash, row));
 						done();
 						this.update(changes);
 					});
@@ -175,8 +167,7 @@ class LiveSelect extends EventEmitter {
 	}
 
 	update(changes) {
-		console.log('Update Count: ', ++c);
-
+		var add    = [];
 		var remove = [];
 
 		// Emit an update event with the changes
@@ -186,83 +177,129 @@ class LiveSelect extends EventEmitter {
 			if(change.type === 'added') {
 				var row = this.rowCache.get(change.key);
 				args.push(change.index, row);
+				add.push(change.key);
+				console.log('update b for ', change.key);
 			}
 			else if(change.type === 'changed') {
 				var oldRow = this.rowCache.get(change.oldKey);
 				var newRow = this.rowCache.get(change.newKey);
 				args.push(change.index, oldRow, newRow);
+				add.push(change.newKey);
 				remove.push(change.oldKey);
+				console.log('update b for ', change.oldKey);
+				console.log('update b for ', change.newRow);
 			}
 			else if(change.type === 'removed') {
 				var row = this.rowCache.get(change.key);
 				args.push(change.index, row);
 				remove.push(change.key);
+				console.log('update b for ', change.key);
 			}
 
 			if(args[2] === null){
-				return this.emit('error', new Error(
-					'CACHE_MISS: ' + (args.length === 3 ? change.key : change.oldKey)));
+				var key = (args.length === 3 ? change.key : change.oldKey);
+				return this.emit('error',
+					new Error(`CACHE_MISS (${args[0]}): ${key}`));
 			}
 			if(args.length > 3 && args[3] === null){
-				return this.emit('error', new Error('CACHE_MISS: ' + change.newKey));
+				var key = change.newKey;
+				return this.emit('error',
+					new Error(`CACHE_MISS (${args[0]}): ${key}`));
 			}
 
 			return args;
 		});
 
+		add.forEach(key => this.rowCache.add(key));
 		remove.forEach(key => this.rowCache.remove(key));
 
 		this.emit('update', filterHashProperties(changes));
 	}
 
 	stop() {
+		this.connect((error, client, done) => {
+			deinit.call(this, client, done);
+		});
+
 		this.hashes.forEach(key => this.rowCache.remove(key));
-		this.triggers.forEach(trigger => trigger.removeAllListeners());
 		this.removeAllListeners();
+		this.parent.removeListener(
+			`change:${this.queryHash}`, this.throttledRefresh);
 	}
+}
+
+function interpolate(query, params) {
+	if(!params || !params.length) return query;
+
+	return query.replace(/\$(\d)/, (match, index) => {
+		var param = params[index - 1];
+
+		if(_.isString(param)) {
+			// TODO: Need to escape quotes here!
+			return `'${param}'`;
+		}
+		else if(param instanceof Date) {
+			return `'${param.toISOString()}'`;
+		}
+		else {
+			return param;
+		}
+	});
 }
 
 function init(client, callback){
-	var { query, queryHash } = this;
+	var { query, staticQuery, queryHash, staticHash } = this;
 
-	// If this query was cached before, reuse it
-	if(!cachedQueryTables[queryHash]) {
-		cachedQueryTables[queryHash] = new Promise((resolve, reject) => {
-			// Replace all parameter values with NULL
-			var tmpQuery = query.replace(/\$\d/g, 'NULL');
-			var tmpName  = `tmp_view_${queryHash}`;
+	var viewName     = `_liveselect_instance_${staticHash}`;
+	var hashViewName = `_liveselect_hashes_${staticHash}`;
 
-			var sql = [
-				`CREATE OR REPLACE TEMP VIEW ${tmpName} AS (${tmpQuery})`,
-				[`SELECT DISTINCT vc.table_name
-					FROM information_schema.view_column_usage vc
-					WHERE view_name = $1`, [ tmpName ] ],
-				[`INSERT INTO _liveselect_queries (id, query)
-					VALUES ($1, $2)`, [queryHash, query] ],
-				[`INSERT INTO _liveselect_column_usage
-						(query_id, table_schema, table_name, column_name)
-					SELECT $1, vc.table_schema, vc.table_name, vc.column_name
-					FROM information_schema.view_column_usage vc
-					WHERE vc.view_name = $2`, [ queryHash, tmpName ] ]
-			];
+	var sql = [
+		`CREATE OR REPLACE VIEW ${viewName} AS (${staticQuery})`,
+		`CREATE OR REPLACE VIEW ${hashViewName} AS (
+			SELECT
+				ROW_NUMBER() OVER () AS row,
+				MD5(CAST(tmp.* AS TEXT)) AS hash
+			FROM
+				(${staticQuery}) tmp
+		)`,
+		[`SELECT DISTINCT vc.table_name
+			FROM information_schema.view_column_usage vc
+			WHERE view_name = $1`, [ viewName ] ],
+		[`INSERT INTO _liveselect_queries (id, query)
+			VALUES ($1, $2)`, [ staticHash, staticQuery ] ],
+		[`INSERT INTO _liveselect_column_usage
+				(query_id, table_schema, table_name, column_name)
+			SELECT $1, vc.table_schema, vc.table_name, vc.column_name
+			FROM information_schema.view_column_usage vc
+			WHERE vc.view_name = $2`, [ staticHash, viewName ] ]
+	];
 
-			querySequence(client, sql, (error, result) => {
-				console.log(error);
-				if(error) return reject(error);
+	querySequence(client, sql, (error, result) => {
+		if(error) return callback(error);
 
-				var tables = result[1].rows.map(row => row.table_name);
+		var tables = result[2].rows.map(row => row.table_name);
 
-				resolve(tables);
-			});
-		});
-	}
-
-	cachedQueryTables[queryHash].then((result) => {
-		callback(null, result);
-	}, (error) => {
-		callback(error, null);
+		callback(null, tables);
 	});
 }
+
+function deinit(client, callback) {
+	var { query, staticQuery, queryHash, staticHash } = this;
+
+	var viewName     = `_liveselect_instance_${staticHash}`;
+	var hashViewName = `_liveselect_hashes_${staticHash}`;
+
+	var sql = [
+		`DROP VIEW ${viewName}`,
+		`DROP VIEW ${hashViewName}`,
+		[`DELETE FROM _liveselect_queries
+			WHERE id = $1`, [ staticHash ] ],
+		[`DELETE FROM _liveselect_column_usage
+			WHERE query_id = $1`, [ staticHash ] ]
+	];
+
+	querySequence(client, sql, callback);
+};
 
 module.exports = LiveSelect;
 

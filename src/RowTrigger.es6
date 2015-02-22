@@ -10,8 +10,6 @@ class RowTrigger extends EventEmitter {
 
 		var { channel, connect, triggerTables } = parent;
 
-		parent.on(`change:${table}`, this.forwardNotification.bind(this));
-
 		if(!(table in triggerTables)) {
 			// Create the trigger for this table on this channel
 			var triggerName = `${channel}_${table}`;
@@ -24,8 +22,66 @@ class RowTrigger extends EventEmitter {
 						`CREATE OR REPLACE FUNCTION ${triggerName}() RETURNS trigger AS $$
 							DECLARE
 								row_data RECORD;
+								changed BOOLEAN;
+								col TEXT;
 							BEGIN
-								PERFORM pg_notify('${channel}', '${table}');
+								FOR row_data IN (
+									SELECT DISTINCT
+										cu.query_id, ARRAY_AGG(cu.column_name) AS columns
+									FROM
+										_liveselect_column_usage cu
+									WHERE
+										cu.table_schema = TG_TABLE_SCHEMA AND
+										cu.table_name = TG_TABLE_NAME AND
+										EXISTS (
+											SELECT ''
+											FROM information_schema.views
+											WHERE table_name = '_liveselect_hashes_' || cu.query_id
+										)
+									GROUP BY
+										cu.query_id
+								) LOOP
+									FOREACH col IN ARRAY row_data.columns
+									LOOP
+										IF TG_OP = 'UPDATE' THEN
+											EXECUTE
+												'SELECT ($1).' || col || ' = ($2).' || col
+											INTO
+												changed USING NEW, OLD;
+										ELSE
+											changed := 1;
+										END IF;
+										IF changed THEN
+											EXECUTE '
+												DELETE FROM
+													_liveselect_hashes
+												WHERE
+													query_id = ' || row_data.query_id || ' AND
+													NOT EXISTS (
+														SELECT '''' FROM _liveselect_hashes_' || row_data.query_id || ' h
+														WHERE
+															h.row = _liveselect_hashes.row AND
+															h.hash = _liveselect_hashes.hash
+													)';
+											EXECUTE '
+												INSERT INTO _liveselect_hashes
+													(query_id, row, hash)
+												SELECT
+													' || row_data.query_id || ', *
+												FROM
+													_liveselect_hashes_' || row_data.query_id || ' h
+												WHERE
+													NOT EXISTS (
+														SELECT '''' FROM _liveselect_hashes h2
+														WHERE
+															h2.row = h.row AND
+															h2.hash = h.hash
+													)';
+											PERFORM pg_notify('${channel}', row_data.query_id::TEXT);
+											EXIT;
+										END IF;
+									END LOOP;
+								END LOOP;
 								RETURN NULL;
 							END;
 						$$ LANGUAGE plpgsql`,
@@ -37,7 +93,10 @@ class RowTrigger extends EventEmitter {
 					];
 
 					querySequence(client, sql, (error, results) => {
-						if(error) return reject(error);
+						if(error) {
+							this.emit('error', error);
+							reject(error);
+						}
 
 						done();
 						resolve();
@@ -53,10 +112,6 @@ class RowTrigger extends EventEmitter {
 			}, (error) => {
 				this.emit('error', error);
 			});
-	}
-
-	forwardNotification() {
-		this.emit('change');
 	}
 }
 
