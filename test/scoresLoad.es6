@@ -58,7 +58,7 @@ exports.scoresLoad = function(test) {
 			if(liveSelects.filter(select => !select.ready).length === 0){
 				querySequence(client, newStudentNames.map((name, index) =>
 					[ `UPDATE students SET name = $1 WHERE id = ${index + 1}`,
-						[ name ] ]), (err, res) => { console.log('updated ', res.rowCount) });
+						[ name ] ]), (err, res) => { });
 
 				// Only perform this operation once
 				updateStudentNames = function() {};

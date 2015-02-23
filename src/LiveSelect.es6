@@ -8,7 +8,7 @@ var querySequence = require('./querySequence');
 // Minimum duration in milliseconds between refreshing results
 // TODO: determine based on load
 // https://git.focus-sis.com/beng/pg-notify-trigger/issues/6
-const THROTTLE_INTERVAL = 250;
+const THROTTLE_INTERVAL = 1000;
 
 class LiveSelect extends EventEmitter {
 	constructor(parent, query, params) {
@@ -19,6 +19,7 @@ class LiveSelect extends EventEmitter {
 		this.data        = [];
 		this.hashes      = [];
 		this.ready       = false;
+		this.stopped     = false;
 		this.staticQuery = interpolate(query, params);
 		this.staticHash  = murmurHash(this.staticQuery);
 		this.parent      = parent;
@@ -28,7 +29,6 @@ class LiveSelect extends EventEmitter {
 		// throttledRefresh method buffers
 		this.throttledRefresh = _.debounce(this.refresh, THROTTLE_INTERVAL).bind(this);
 
-		// parent.on(`change:${this.staticHash}`, this.throttledRefresh);
 		parent.on(`update:${this.staticHash}`, this.throttledRefresh);
 
 		this.connect((error, client, done) => {
@@ -204,6 +204,7 @@ class LiveSelect extends EventEmitter {
 			deinit.call(this, client, done);
 		});
 
+		this.stopped = true;
 		this.hashes.forEach(key => this.rowCache.remove(key));
 		this.removeAllListeners();
 		this.parent.removeListener(

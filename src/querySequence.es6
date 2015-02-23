@@ -10,18 +10,37 @@ module.exports = function(client, debug, queries, callback){
 		debug    = false;
 	}
 
-	if(queries.length === 0) return callback();
+	if(queries.length === 0) {
+		if(typeof callback === 'function') {
+			return callback();
+		}
+		else {
+			return;
+		}
+	}
 
 	var results = [];
 
 	client.query('BEGIN', (error, result) => {
-		if(error) return callback(error);
+		if(error) {
+			if(typeof callback === 'function') {
+				return callback(error);
+			}
+			else {
+				throw new Error(error);
+			}
+		}
 
 		var sequence = queries.map(function(query, index, initQueries){
 			var tmpCallback = function(error, rows, fields) {
 				if(error) {
 					client.query('ROLLBACK', (rollbackError, result) => {
-						callback(rollbackError || error);
+						if(typeof callback === 'function') {
+							callback(rollbackError || error);
+						}
+						else if(rollbackError || error) {
+							throw new Error(rollbackError || error);
+						}
 					});
 				}
 
@@ -32,8 +51,21 @@ module.exports = function(client, debug, queries, callback){
 				}
 				else {
 					client.query('COMMIT', (error, result) => {
-						if(error) return callback(error);
-						return callback(null, results);
+						if(error) {
+							if(typeof callback === 'function') {
+								return callback(error);
+							}
+							else {
+								throw new Error(error);
+							}
+						}
+
+						if(typeof callback === 'function') {
+							return callback(null, results);
+						}
+						else {
+							return results;
+						}
 					});
 				}
 			};

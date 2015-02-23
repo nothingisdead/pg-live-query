@@ -8,6 +8,9 @@ var RowTrigger    = require('./RowTrigger');
 var LiveSelect    = require('./LiveSelect');
 
 var messageCache = {};
+var updateQueue  = {};
+
+const THROTTLE_INTERVAL = 1000;
 
 class PgTriggers extends EventEmitter {
 	constructor(connect, channel) {
@@ -15,6 +18,7 @@ class PgTriggers extends EventEmitter {
 		this.channel       = channel;
 		this.rowCache      = new RowCache;
 		this.triggerTables = [];
+		this.instances     = {};
 
 		this.setMaxListeners(0); // Allow unlimited listeners
 
@@ -43,7 +47,11 @@ class PgTriggers extends EventEmitter {
 	}
 
 	select(query, params) {
-		return new LiveSelect(this, query, params);
+		var instance = new LiveSelect(this, query, params);
+
+		this.instances[instance.staticHash] = instance;
+
+		return instance;
 	}
 
 	cleanup(callback) {
@@ -74,7 +82,25 @@ class PgTriggers extends EventEmitter {
 	}
 }
 
+function update() {
+	var queryHashes = _.keys(updateQueue);
+
+	updateQueue = {};
+
+	var sql = queryHashes
+		.filter(hash => !this.instances[hash].stopped)
+		.map(hash => `SELECT _ls_update_query(${hash})`);
+
+	if(sql.length) {
+		this.getClient((error, client, done) => {
+			querySequence(client, sql);
+		});
+	}
+}
+
 function listen(callback) {
+	var throttledUpdate = _.debounce(update, THROTTLE_INTERVAL).bind(this);
+
 	this.getClient((error, client, done) => {
 		if(error) return this.emit('error', error);
 
@@ -83,10 +109,15 @@ function listen(callback) {
 			});
 
 			client.on('notification', (info) => {
-				var [ messageId, part, max, text ] = info.payload.split('||');
+				if(info.payload.indexOf('update:') === 0) {
+					var [ action, queryHash ] = info.payload.split(':');
 
-				// TODO: Remove outer if statement in cleanup
-				if(text) {
+					updateQueue[queryHash] = true;
+					throttledUpdate();
+				}
+				else {
+					var [ messageId, part, max, text ] = info.payload.split('||');
+
 					if(_.isUndefined(messageCache[messageId])) {
 						messageCache[messageId] = [];
 					}
@@ -105,9 +136,9 @@ function listen(callback) {
 
 						delete messageCache[messageId];
 					}
-				}
 
-				this.emit(`change:${info.payload}`);
+					this.emit(`change:${info.payload}`);
+				}
 			});
 	});
 }
@@ -136,6 +167,30 @@ function createTables(callback) {
 					RETURN NEXT
 						message_id || '||' || i || '||' || max_index || '||' ||
 						SUBSTRING(message FROM i * 7900 FOR 7900);
+				END LOOP;
+			END;
+		$$ LANGUAGE plpgsql`,
+		`CREATE OR REPLACE FUNCTION _ls_update_query(query_id BIGINT) RETURNS void AS $$
+			DECLARE
+				hash TEXT;
+				view TEXT;
+				query TEXT;
+				hashes TEXT;
+				message TEXT;
+			BEGIN
+				view = '_ls_hashes_' || query_id;
+
+				query = '
+					SELECT
+						NOW() || ''::'' || $1 || ''::'' || STRING_AGG(hash, '','')
+					FROM
+						' || view::regclass;
+
+				EXECUTE query INTO hashes USING query_id;
+
+				FOR message IN SELECT _ls_split_message(hashes)
+				LOOP
+					PERFORM pg_notify('${this.channel}', message);
 				END LOOP;
 			END;
 		$$ LANGUAGE plpgsql`

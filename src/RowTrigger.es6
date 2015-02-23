@@ -22,11 +22,6 @@ class RowTrigger extends EventEmitter {
 						`CREATE OR REPLACE FUNCTION ${triggerName}() RETURNS trigger AS $$
 							DECLARE
 								row_data RECORD;
-								hash TEXT;
-								view TEXT;
-								query TEXT;
-								hashes TEXT;
-								message TEXT;
 							BEGIN
 								FOR row_data IN (
 									SELECT DISTINCT
@@ -42,21 +37,7 @@ class RowTrigger extends EventEmitter {
 											WHERE table_name = '_ls_hashes_' || tu.query_id
 										)
 								) LOOP
-									view = '_ls_hashes_' || row_data.query_id;
-
-									query = '
-										SELECT
-											NOW() || ''::'' || $1 || ''::'' || STRING_AGG(hash, '','')
-										FROM
-											' || view::regclass;
-
-									EXECUTE query INTO hashes USING row_data.query_id;
-
-									FOR message IN SELECT _ls_split_message(hashes)
-									LOOP
-										PERFORM pg_notify('${channel}', message);
-									END LOOP;
-									PERFORM pg_notify('${channel}', row_data.query_id::TEXT);
+									PERFORM pg_notify('${channel}', 'update:' || row_data.query_id);
 								END LOOP;
 								RETURN NULL;
 							END;
