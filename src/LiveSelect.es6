@@ -14,22 +14,22 @@ class LiveSelect extends EventEmitter {
 	constructor(parent, query, params) {
 		var { connect, channel, rowCache } = parent;
 
-		this.query       = query;
-		this.params      = params || [];
 		this.connect     = connect;
 		this.rowCache    = rowCache;
 		this.data        = [];
 		this.hashes      = [];
 		this.ready       = false;
 		this.staticQuery = interpolate(query, params);
-		this.queryHash   = murmurHash(this.query);
 		this.staticHash  = murmurHash(this.staticQuery);
 		this.parent      = parent;
+		this.lastUpdate  = null;
+		this.params      = params;
 
 		// throttledRefresh method buffers
 		this.throttledRefresh = _.debounce(this.refresh, THROTTLE_INTERVAL).bind(this);
 
-		parent.on(`change:${this.staticHash}`, this.throttledRefresh);
+		// parent.on(`change:${this.staticHash}`, this.throttledRefresh);
+		parent.on(`update:${this.staticHash}`, this.throttledRefresh);
 
 		this.connect((error, client, done) => {
 			if(error) return this.emit('error', error);
@@ -37,133 +37,120 @@ class LiveSelect extends EventEmitter {
 			init.call(this, client, (error, tables) => {
 				if(error) return this.emit('error', error);
 
-				done();
-
 				this.triggers = tables.map(table => parent.createTrigger(table));
 
-				this.triggers.forEach(trigger => {
-					trigger.on('ready', () => {
-						// Check if all handlers are ready
-						var pending = this.triggers.filter(trigger => !trigger.ready);
+				var sql = `SELECT hash FROM _ls_hashes_${this.staticHash}`;
 
-						if(pending.length === 0) {
-							this.ready = true;
-							this.emit('ready');
-						}
-					});
+				client.query(sql, (error, result) => {
+					if(error) return this.emit('error', error);
+
+					done();
+					this.refresh(new Date(), result.rows.map(row => row.hash));
+					this.ready = true;
+					this.emit('ready');
 				});
 			});
 		});
-
-		// Grab initial results
-		this.refresh();
 	}
 
-	refresh() {
-		// Run a query to get an updated hash map
-		var sql = `
-			SELECT
-				MD5(CAST(tmp.* AS TEXT)) AS _hash
-			FROM
-				(${this.query}) tmp
-		`;
+	refresh(date, hashes) {
+		// Only process this update if it
+		// is more recent than the last update
+		if(this.lastUpdate && this.lastUpdate >= date) {
+			return;
+		}
 
-		this.connect((error, client, done) => {
-			if(error) return this.emit('error', error);
+		this.lastUpdate = date;
 
-			client.query(sql, this.params, (error, result) =>  {
-				if(error) return this.emit('error', error);
+		var fetch = {};
+		var diff  = deep.diff(this.hashes, hashes) || [];
 
-				var freshHashes = _.pluck(result.rows, '_hash');
-				var diff   = deep.diff(this.hashes, freshHashes);
-				var fetch  = {};
+		this.hashes = hashes;
 
-				// Store the new hash map
-				this.hashes = freshHashes;
+		var changes = diff.map(change => {
+			var tmpChange = {};
 
-				// If nothing has changed, stop here
-				if(!diff || !diff.length) {
-					return;
-				}
-
-				// Build a list of changes and hashes to fetch
-				var changes = diff.map(change => {
-					var tmpChange = {};
-
-					if(change.kind === 'E') {
-						_.extend(tmpChange, {
-							type   : 'changed',
-							index  : change.path.pop(),
-							oldKey : change.lhs,
-							newKey : change.rhs
-						});
-
-						if(this.rowCache.get(tmpChange.oldKey) === null) {
-							fetch[tmpChange.oldKey] = true;
-						}
-
-						if(this.rowCache.get(tmpChange.newKey) === null) {
-							fetch[tmpChange.newKey] = true;
-						}
-					}
-					else if(change.kind === 'A') {
-						_.extend(tmpChange, {
-							index : change.index
-						})
-
-						if(change.item.kind === 'N') {
-							tmpChange.type = 'added';
-							tmpChange.key  = change.item.rhs;
-						}
-						else {
-							tmpChange.type = 'removed';
-							tmpChange.key  = change.item.lhs;
-						}
-
-						if(this.rowCache.get(tmpChange.key) === null) {
-							fetch[tmpChange.key] = true;
-						}
-					}
-					else {
-						throw new Error(`Unrecognized change: ${JSON.stringify(change)}`);
-					}
-
-					return tmpChange;
+			if(change.kind === 'E') {
+				_.extend(tmpChange, {
+					type    : 'changed',
+					index   : change.path.pop(),
+					oldHash : change.lhs,
+					newHash : change.rhs
 				});
 
-				if(_.isEmpty(fetch)) {
-					done();
-					this.update(changes);
+				if(this.rowCache.get(tmpChange.oldHash) === null) {
+					fetch[tmpChange.oldHash] = true;
+				}
+
+				if(this.rowCache.get(tmpChange.newHash) === null) {
+					fetch[tmpChange.newHash] = true;
+				}
+			}
+			else if(change.kind === 'A') {
+				_.extend(tmpChange, {
+					index : change.index
+				})
+
+				if(change.item.kind === 'N') {
+					tmpChange.type = 'added';
+					tmpChange.hash  = change.item.rhs;
 				}
 				else {
-					var sql = `
-						WITH
-							tmp AS (${this.query})
-						SELECT
-							tmp2.*
-						FROM
-							(
-								SELECT
-									MD5(CAST(tmp.* AS TEXT)) AS _hash,
-									tmp.*
-								FROM
-									tmp
-							) tmp2
-						WHERE
-							tmp2._hash IN ('${_.keys(fetch).join("', '")}')
-					`;
-
-					// Fetch hashes that aren't in the cache
-					client.query(sql, this.params, (error, result) => {
-						if(error) return this.emit('error', error);
-
-						result.rows.forEach(row => this.rowCache.set(row._hash, row));
-						done();
-						this.update(changes);
-					});
+					tmpChange.type = 'removed';
+					tmpChange.hash  = change.item.lhs;
 				}
-			});
+
+				if(this.rowCache.get(tmpChange.hash) === null) {
+					fetch[tmpChange.hash] = true;
+				}
+			}
+			else {
+				throw new Error(`Unrecognized change: ${JSON.stringify(change)}`);
+			}
+
+			return tmpChange;
 		});
+
+		// If there were no changes, do nothing
+		if(!changes.length) {
+			return;
+		}
+
+		if(_.isEmpty(fetch)) {
+			this.update(changes);
+		}
+		else {
+			var sql = `
+				WITH tmp AS (
+					SELECT
+						MD5(CAST(t.* AS TEXT)) AS _hash,
+						t.*
+					FROM
+						_ls_instance_${this.staticHash} t
+				)
+				SELECT
+					DISTINCT *
+				FROM
+					tmp
+				WHERE
+					tmp._hash IN ('${_.keys(fetch).join("', '")}')
+			`;
+
+			this.connect((error, client, done) => {
+				if(error) return this.emit('error', error);
+
+				// Fetch rows that have changed
+				client.query(sql, (error, result) => {
+					if(error) return this.emit('error', error);
+
+					result.rows.forEach(row =>
+						this.rowCache.set(row._hash, _.omit(row, '_hash')));
+
+					done();
+					this.update(changes);
+				});
+			});
+		}
 	}
 
 	update(changes) {
@@ -175,36 +162,32 @@ class LiveSelect extends EventEmitter {
 			var args = [change.type];
 
 			if(change.type === 'added') {
-				var row = this.rowCache.get(change.key);
+				var row = this.rowCache.get(change.hash);
 				args.push(change.index, row);
-				add.push(change.key);
-				console.log('update b for ', change.key);
+				add.push(change.hash);
 			}
 			else if(change.type === 'changed') {
-				var oldRow = this.rowCache.get(change.oldKey);
-				var newRow = this.rowCache.get(change.newKey);
+				var oldRow = this.rowCache.get(change.oldHash);
+				var newRow = this.rowCache.get(change.newHash);
 				args.push(change.index, oldRow, newRow);
-				add.push(change.newKey);
-				remove.push(change.oldKey);
-				console.log('update b for ', change.oldKey);
-				console.log('update b for ', change.newRow);
+				add.push(change.newHash);
+				remove.push(change.oldHash);
 			}
 			else if(change.type === 'removed') {
-				var row = this.rowCache.get(change.key);
+				var row = this.rowCache.get(change.hash);
 				args.push(change.index, row);
-				remove.push(change.key);
-				console.log('update b for ', change.key);
+				remove.push(change.hash);
 			}
 
 			if(args[2] === null){
-				var key = (args.length === 3 ? change.key : change.oldKey);
+				var hash = (args.length === 3 ? change.hash : change.oldHash);
 				return this.emit('error',
-					new Error(`CACHE_MISS (${args[0]}): ${key}`));
+					new Error(`CACHE_MISS (${args[0]}): ${hash}`));
 			}
 			if(args.length > 3 && args[3] === null){
-				var key = change.newKey;
+				var hash = change.newHash;
 				return this.emit('error',
-					new Error(`CACHE_MISS (${args[0]}): ${key}`));
+					new Error(`CACHE_MISS (${args[0]}): ${hash}`));
 			}
 
 			return args;
@@ -213,7 +196,7 @@ class LiveSelect extends EventEmitter {
 		add.forEach(key => this.rowCache.add(key));
 		remove.forEach(key => this.rowCache.remove(key));
 
-		this.emit('update', filterHashProperties(changes));
+		this.emit('update', changes);
 	}
 
 	stop() {
@@ -224,7 +207,7 @@ class LiveSelect extends EventEmitter {
 		this.hashes.forEach(key => this.rowCache.remove(key));
 		this.removeAllListeners();
 		this.parent.removeListener(
-			`change:${this.queryHash}`, this.throttledRefresh);
+			`update:${this.staticHash}`, this.throttledRefresh);
 	}
 }
 
@@ -248,10 +231,10 @@ function interpolate(query, params) {
 }
 
 function init(client, callback){
-	var { query, staticQuery, queryHash, staticHash } = this;
+	var { query, staticQuery, staticHash } = this;
 
-	var viewName     = `_liveselect_instance_${staticHash}`;
-	var hashViewName = `_liveselect_hashes_${staticHash}`;
+	var viewName     = `_ls_instance_${staticHash}`;
+	var hashViewName = `_ls_hashes_${staticHash}`;
 
 	var sql = [
 		`CREATE OR REPLACE VIEW ${viewName} AS (${staticQuery})`,
@@ -265,13 +248,12 @@ function init(client, callback){
 		[`SELECT DISTINCT vc.table_name
 			FROM information_schema.view_column_usage vc
 			WHERE view_name = $1`, [ viewName ] ],
-		[`INSERT INTO _liveselect_queries (id, query)
-			VALUES ($1, $2)`, [ staticHash, staticQuery ] ],
-		[`INSERT INTO _liveselect_column_usage
-				(query_id, table_schema, table_name, column_name)
-			SELECT $1, vc.table_schema, vc.table_name, vc.column_name
+		[`INSERT INTO _ls_table_usage
+				(query_id, table_schema, table_name)
+			SELECT $1, vc.table_schema, vc.table_name
 			FROM information_schema.view_column_usage vc
-			WHERE vc.view_name = $2`, [ staticHash, viewName ] ]
+			WHERE vc.view_name = $2
+			GROUP BY vc.table_schema, vc.table_name`, [ staticHash, viewName ] ]
 	];
 
 	querySequence(client, sql, (error, result) => {
@@ -284,29 +266,19 @@ function init(client, callback){
 }
 
 function deinit(client, callback) {
-	var { query, staticQuery, queryHash, staticHash } = this;
+	var { query, staticQuery, staticHash } = this;
 
-	var viewName     = `_liveselect_instance_${staticHash}`;
-	var hashViewName = `_liveselect_hashes_${staticHash}`;
+	var viewName     = `_ls_instance_${staticHash}`;
+	var hashViewName = `_ls_hashes_${staticHash}`;
 
 	var sql = [
 		`DROP VIEW ${viewName}`,
 		`DROP VIEW ${hashViewName}`,
-		[`DELETE FROM _liveselect_queries
-			WHERE id = $1`, [ staticHash ] ],
-		[`DELETE FROM _liveselect_column_usage
-			WHERE query_id = $1`, [ staticHash ] ]
+		[`DELETE FROM _ls_table_usage
+			WHERE query_id = $1`, [ staticHash ] ],
 	];
 
 	querySequence(client, sql, callback);
 };
 
 module.exports = LiveSelect;
-
-function filterHashProperties(diff) {
-	return diff.map(event => {
-		delete event[2]._hash;
-		if(event.length > 3) delete event[3]._hash;
-		return event;
-	});
-}

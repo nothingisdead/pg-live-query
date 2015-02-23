@@ -1,10 +1,13 @@
 var _            = require('lodash');
+var moment       = require('moment');
 var EventEmitter = require('events').EventEmitter;
 
 var querySequence = require('./querySequence');
 var RowCache      = require('./RowCache');
 var RowTrigger    = require('./RowTrigger');
 var LiveSelect    = require('./LiveSelect');
+
+var messageCache = {};
 
 class PgTriggers extends EventEmitter {
 	constructor(connect, channel) {
@@ -80,10 +83,28 @@ function listen(callback) {
 			});
 
 			client.on('notification', (info) => {
-				var i = info.payload.indexOf('test:');
-				if(i === 0) {
-					var payload = JSON.parse(info.payload.substring(5));
-					console.log('update a for ', payload.hash);
+				var [ messageId, part, max, text ] = info.payload.split('||');
+
+				// TODO: Remove outer if statement in cleanup
+				if(text) {
+					if(_.isUndefined(messageCache[messageId])) {
+						messageCache[messageId] = [];
+					}
+
+					messageCache[messageId][+part] = text;
+
+					if(messageCache[messageId].length === +max + 1) {
+						var message = messageCache[messageId].join('');
+
+						var [ timestamp, queryHash, rowHashes ] = message.split('::');
+
+						var hashes = rowHashes.split(',');
+						var date   = moment(timestamp).toDate();
+
+						this.emit(`update:${queryHash}`, date, hashes);
+
+						delete messageCache[messageId];
+					}
 				}
 
 				this.emit(`change:${info.payload}`);
@@ -93,40 +114,31 @@ function listen(callback) {
 
 function createTables(callback) {
 	var sql = [
-		`CREATE TABLE IF NOT EXISTS _liveselect_queries (
-			id BIGINT PRIMARY KEY,
-			query TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS _liveselect_column_usage (
+		`CREATE TABLE IF NOT EXISTS _ls_table_usage (
 			id SERIAL PRIMARY KEY,
 			query_id BIGINT,
 			table_schema VARCHAR(255),
-			table_name VARCHAR(255),
-			column_name VARCHAR(255)
+			table_name VARCHAR(255)
 		)`,
-		`CREATE TABLE IF NOT EXISTS _liveselect_hashes (
-			id SERIAL PRIMARY KEY,
-			query_id BIGINT,
-			row BIGINT,
-			hash VARCHAR(255)
-		)`,
-		`TRUNCATE TABLE _liveselect_queries`,
-		`TRUNCATE TABLE _liveselect_column_usage`,
-		`CREATE OR REPLACE FUNCTION _liveselect_update() RETURNS trigger AS $$
+		`DROP SEQUENCE IF EXISTS "_ls_message_seq"`,
+		`CREATE SEQUENCE "_ls_message_seq"`,
+		`ALTER SEQUENCE "_ls_message_seq" RESTART WITH 1`,
+		`TRUNCATE TABLE _ls_table_usage`,
+		`CREATE OR REPLACE FUNCTION _ls_split_message(message TEXT) RETURNS SETOF TEXT AS $$
+			DECLARE max_index INT;
+			DECLARE message_id INT;
+			DECLARE part TEXT;
 			BEGIN
-				IF TG_OP = 'DELETE' THEN
-					PERFORM pg_notify('${this.channel}', 'test:' || ROW_TO_JSON(old.*));
-				ELSE
-					PERFORM pg_notify('${this.channel}', 'test:' || ROW_TO_JSON(new.*));
-				END IF;
-				RETURN NULL;
+				message_id = NEXTVAL('_ls_message_seq');
+				max_index  = FLOOR(OCTET_LENGTH(message) / 7900);
+
+				FOR i IN 0..max_index LOOP
+					RETURN NEXT
+						message_id || '||' || i || '||' || max_index || '||' ||
+						SUBSTRING(message FROM i * 7900 FOR 7900);
+				END LOOP;
 			END;
-		$$ LANGUAGE plpgsql`,
-		`DROP TRIGGER IF EXISTS "_liveselect_update"
-			ON "_liveselect_hashes"`,
-		`CREATE TRIGGER "_liveselect_update"
-			AFTER INSERT OR UPDATE OR DELETE ON "_liveselect_hashes"
-			FOR EACH ROW EXECUTE PROCEDURE _liveselect_update()`
+		$$ LANGUAGE plpgsql`
 	];
 
 	this.getClient((error, client, done) => {

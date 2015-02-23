@@ -22,65 +22,41 @@ class RowTrigger extends EventEmitter {
 						`CREATE OR REPLACE FUNCTION ${triggerName}() RETURNS trigger AS $$
 							DECLARE
 								row_data RECORD;
-								changed BOOLEAN;
-								col TEXT;
+								hash TEXT;
+								view TEXT;
+								query TEXT;
+								hashes TEXT;
+								message TEXT;
 							BEGIN
 								FOR row_data IN (
 									SELECT DISTINCT
-										cu.query_id, ARRAY_AGG(cu.column_name) AS columns
+										tu.query_id
 									FROM
-										_liveselect_column_usage cu
+										_ls_table_usage tu
 									WHERE
-										cu.table_schema = TG_TABLE_SCHEMA AND
-										cu.table_name = TG_TABLE_NAME AND
+										tu.table_schema = TG_TABLE_SCHEMA AND
+										tu.table_name = TG_TABLE_NAME AND
 										EXISTS (
 											SELECT ''
 											FROM information_schema.views
-											WHERE table_name = '_liveselect_hashes_' || cu.query_id
+											WHERE table_name = '_ls_hashes_' || tu.query_id
 										)
-									GROUP BY
-										cu.query_id
 								) LOOP
-									FOREACH col IN ARRAY row_data.columns
+									view = '_ls_hashes_' || row_data.query_id;
+
+									query = '
+										SELECT
+											NOW() || ''::'' || $1 || ''::'' || STRING_AGG(hash, '','')
+										FROM
+											' || view::regclass;
+
+									EXECUTE query INTO hashes USING row_data.query_id;
+
+									FOR message IN SELECT _ls_split_message(hashes)
 									LOOP
-										IF TG_OP = 'UPDATE' THEN
-											EXECUTE
-												'SELECT ($1).' || col || ' = ($2).' || col
-											INTO
-												changed USING NEW, OLD;
-										ELSE
-											changed := 1;
-										END IF;
-										IF changed THEN
-											EXECUTE '
-												DELETE FROM
-													_liveselect_hashes
-												WHERE
-													query_id = ' || row_data.query_id || ' AND
-													NOT EXISTS (
-														SELECT '''' FROM _liveselect_hashes_' || row_data.query_id || ' h
-														WHERE
-															h.row = _liveselect_hashes.row AND
-															h.hash = _liveselect_hashes.hash
-													)';
-											EXECUTE '
-												INSERT INTO _liveselect_hashes
-													(query_id, row, hash)
-												SELECT
-													' || row_data.query_id || ', *
-												FROM
-													_liveselect_hashes_' || row_data.query_id || ' h
-												WHERE
-													NOT EXISTS (
-														SELECT '''' FROM _liveselect_hashes h2
-														WHERE
-															h2.row = h.row AND
-															h2.hash = h.hash
-													)';
-											PERFORM pg_notify('${channel}', row_data.query_id::TEXT);
-											EXIT;
-										END IF;
+										PERFORM pg_notify('${channel}', message);
 									END LOOP;
+									PERFORM pg_notify('${channel}', row_data.query_id::TEXT);
 								END LOOP;
 								RETURN NULL;
 							END;
@@ -89,7 +65,7 @@ class RowTrigger extends EventEmitter {
 							ON "${table}"`,
 						`CREATE TRIGGER "${triggerName}"
 							AFTER INSERT OR UPDATE OR DELETE ON "${table}"
-							FOR EACH ROW EXECUTE PROCEDURE ${triggerName}()`
+							FOR EACH STATEMENT EXECUTE PROCEDURE ${triggerName}()`
 					];
 
 					querySequence(client, sql, (error, results) => {
