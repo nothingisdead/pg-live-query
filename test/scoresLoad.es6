@@ -80,9 +80,15 @@ exports.scoresLoad = function(test) {
 		// Stage 1 : update each student name
 		var updateStudentNames = function() {
 			if(liveSelects.filter(select => !select.ready).length === 0){
+				printStats && console.time('update student names');
 				querySequence.noTx(triggers, newStudentNames.map((name, index) =>
 					[ `UPDATE students SET name = $1 WHERE id = ${index + 1}`,
-						[ name ] ]));
+						[ name ] ])).then(result => {
+						if(printStats) {
+							console.timeEnd('update student names')
+							console.time('student names changed on instances')
+						}
+					});
 
 				// Only perform this operation once
 				updateStudentNames = function() {};
@@ -96,9 +102,6 @@ exports.scoresLoad = function(test) {
 			var queries        = [];
 			var finalCount =
 				Math.round(scoresToUpdate.length * (100 - percentToUpdate) / 100);
-
-			printStats && console.log(
-				'Score row update count', scoresToUpdate.length - finalCount);
 
 			while(scoresToUpdate.length > finalCount){
 				var id = scoresToUpdate.splice(
@@ -114,8 +117,12 @@ exports.scoresLoad = function(test) {
 
 			printStats && console.time('score update queries')
 
-			querySequence.noTx(triggers, queries).then(result =>
-				printStats && console.timeEnd('score update queries'));
+			querySequence.noTx(triggers, queries).then(result => {
+				if(printStats) {
+					console.timeEnd('score update queries')
+					console.time('scores updated on instances')
+				}
+			});
 		};
 
 		liveSelects.forEach(select => {
@@ -148,6 +155,7 @@ exports.scoresLoad = function(test) {
 							.indexOf(false) === -1, 'Student name update check');
 
 						if(readyCount === liveSelects.length){
+							printStats && console.time('student names changed on instances');
 							curStage++;
 							readyCount = 0;
 
@@ -164,6 +172,7 @@ exports.scoresLoad = function(test) {
 
 						if(updatedScoreIds.length === 0){
 							if(printStats){
+								console.timeEnd('scores updated on instances');
 								clearInterval(memoryInterval);
 								console.log(JSON.stringify(memoryUsageSnapshots));
 							}
