@@ -72,7 +72,7 @@ class PgTriggers extends EventEmitter {
 		var { channel, triggerTables } = this;
 		return new Promise((resolve, reject) => {
 			this.getQueryTables(query).then(tables => {
-				tables.forEach(table => {
+				Promise.all(tables.map(table => {
 					if(!(table in triggerTables)) {
 						// Create the trigger for this table on this channel
 						var triggerName = `${channel}_${table}`;
@@ -91,12 +91,15 @@ class PgTriggers extends EventEmitter {
 								EXECUTE PROCEDURE ${triggerName}()`
 						]).catch(error => this.emit('error', error));
 
-						triggerTables[table].updateFunctions = [];
+						triggerTables[table].updateFunctions = [ updateFunction ];
+						return triggerTables[table];
+					}else{
+						if(triggerTables[table].updateFunctions.indexOf(updateFunction) === -1){
+							triggerTables[table].updateFunctions.push(updateFunction);
+						}
+						return Promise.resolve();
 					}
-
-					triggerTables[table].updateFunctions.push(updateFunction);
-				});
-				resolve(tables);
+				})).then(() => { resolve(tables) }, reject);
 			}, reject);
 		});
 	}

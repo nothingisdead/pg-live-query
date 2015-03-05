@@ -40,129 +40,133 @@ class LiveSelect extends EventEmitter {
 			this.init = new Promise((resolve, reject) => {
 				parent.init.then(result => {
 					querySequence(parent, [ `
-							INSERT INTO
-								${parent.hashTable} (query_hash, row_hashes)
-							VALUES (${this.queryHash}, '{}')
-						`,
-						interpolate(`
-						CREATE OR REPLACE FUNCTION ${this.updateFunction}()
-							RETURNS TEXT AS $$
-							DECLARE
-								notify_data TEXT;
-							BEGIN
-								WITH
-									cur_results AS (${query}),
-									cur_hashes AS (
-										SELECT
-											ROW_NUMBER() OVER () AS _index,
-											MD5(
-												CAST(ROW_TO_JSON(cur_results.*) AS TEXT) ||
-												CAST(ROW_NUMBER() OVER () AS TEXT)
-											) AS _hash
+						INSERT INTO
+							${parent.hashTable} (query_hash, row_hashes)
+						VALUES (${this.queryHash}, '{}')
+					`,
+					interpolate(`
+					CREATE OR REPLACE FUNCTION ${this.updateFunction}()
+						RETURNS TEXT AS $$
+						DECLARE
+							notify_data TEXT;
+						BEGIN
+							WITH
+								cur_results AS (${query}),
+								cur_hashes AS (
+									SELECT
+										ROW_NUMBER() OVER () AS _index,
+										MD5(
+											CAST(ROW_TO_JSON(cur_results.*) AS TEXT) ||
+											CAST(ROW_NUMBER() OVER () AS TEXT)
+										) AS _hash
+									FROM
+										cur_results),
+								old_hashes AS (
+									SELECT
+										ROW_NUMBER() OVER () AS _index,
+										tmp._hash
+									FROM
+										(SELECT
+											UNNEST(row_hashes) AS _hash
 										FROM
-											cur_results),
-									old_hashes AS (
-										SELECT
-											ROW_NUMBER() OVER () AS _index,
-											tmp._hash
+											${parent.hashTable}
+										WHERE
+											query_hash = ${this.queryHash}) AS tmp),
+								changed_hashes AS (
+									SELECT * FROM old_hashes
+									EXCEPT SELECT * FROM cur_hashes),
+								moved_hashes AS (
+									SELECT
+										cur_hashes._index AS new_index,
+										old_hashes._index AS old_index,
+										cur_hashes._hash AS _hash
+									FROM
+										cur_hashes
+									JOIN
+										old_hashes ON
+											(old_hashes._hash = cur_hashes._hash)
+									WHERE
+										cur_hashes._hash IN (SELECT _hash FROM changed_hashes)),
+								removed_hashes AS (
+									SELECT * FROM changed_hashes WHERE _hash NOT IN
+										(SELECT _hash FROM moved_hashes)),
+								new_data AS (
+									SELECT ROW_TO_JSON(tmp3.*) AS row_json
 										FROM
 											(SELECT
-												UNNEST(row_hashes) AS _hash
-											FROM
-												${parent.hashTable}
-											WHERE
-												query_hash = ${this.queryHash}) AS tmp),
-									changed_hashes AS (
-										SELECT * FROM old_hashes
-										EXCEPT SELECT * FROM cur_hashes),
-									moved_hashes AS (
-										SELECT
-											cur_hashes._index AS new_index,
-											old_hashes._index AS old_index,
-											cur_hashes._hash AS _hash
-										FROM
-											cur_hashes
-										JOIN
-											old_hashes ON
-												(old_hashes._hash = cur_hashes._hash)
-										WHERE
-											cur_hashes._hash IN (SELECT _hash FROM changed_hashes)),
-									removed_hashes AS (
-										SELECT * FROM changed_hashes WHERE _hash NOT IN
-											(SELECT _hash FROM moved_hashes)),
-									new_data AS (
-										SELECT ROW_TO_JSON(tmp3.*) AS row_json
-											FROM
-												(SELECT
-													MD5(
-														CAST(ROW_TO_JSON(cur_results.*) AS TEXT) ||
-														CAST(ROW_NUMBER() OVER () AS TEXT)
-													) AS _hash,
-													ROW_NUMBER() OVER () AS _index,
-													cur_results.*
-												FROM cur_results) AS tmp3
-										WHERE
-											_hash IN (
-												SELECT _hash FROM cur_hashes
-													EXCEPT SELECT _hash FROM old_hashes)),
-									update_hashes AS (
-										UPDATE
-											${parent.hashTable}
-										SET
-											row_hashes =
-												(SELECT ARRAY_AGG(cur_hashes._hash)	FROM cur_hashes)
-										WHERE
-											query_hash = ${this.queryHash}),
-									removed_hashes_prep AS (
-										SELECT
-											${this.queryHash} AS query_hash,
-											JSON_AGG(removed_hashes.*) AS removed
-										FROM
-											removed_hashes),
-									moved_hashes_prep AS (
-										SELECT
-											${this.queryHash} AS query_hash,
-											JSON_AGG(moved_hashes.*) AS moved
-										FROM
-											moved_hashes),
-									new_data_prep AS (
-										SELECT
-											${this.queryHash} AS query_hash,
-											JSON_AGG(new_data.row_json) AS added
-										FROM
-											new_data),
-									joined_prep AS (
-										SELECT
-											removed_hashes_prep.removed,
-											moved_hashes_prep.moved,
-											new_data_prep.added
-										INTO
-											notify_data
-										FROM
-											removed_hashes_prep
-										JOIN new_data_prep ON
-											(removed_hashes_prep.query_hash =
-												new_data_prep.query_hash)
-										JOIN moved_hashes_prep ON
-											(removed_hashes_prep.query_hash =
-												moved_hashes_prep.query_hash))
-								SELECT
-									JSON_AGG(joined_prep.*)
-								FROM
-									joined_prep;
+												MD5(
+													CAST(ROW_TO_JSON(cur_results.*) AS TEXT) ||
+													CAST(ROW_NUMBER() OVER () AS TEXT)
+												) AS _hash,
+												ROW_NUMBER() OVER () AS _index,
+												cur_results.*
+											FROM cur_results) AS tmp3
+									WHERE
+										_hash IN (
+											SELECT _hash FROM cur_hashes
+												EXCEPT SELECT _hash FROM old_hashes)),
+								update_hashes AS (
+									UPDATE
+										${parent.hashTable}
+									SET
+										row_hashes =
+											(SELECT ARRAY_AGG(cur_hashes._hash)	FROM cur_hashes)
+									WHERE
+										query_hash = ${this.queryHash}),
+								removed_hashes_prep AS (
+									SELECT
+										${this.queryHash} AS query_hash,
+										JSON_AGG(removed_hashes.*) AS removed
+									FROM
+										removed_hashes),
+								moved_hashes_prep AS (
+									SELECT
+										${this.queryHash} AS query_hash,
+										JSON_AGG(moved_hashes.*) AS moved
+									FROM
+										moved_hashes),
+								new_data_prep AS (
+									SELECT
+										${this.queryHash} AS query_hash,
+										JSON_AGG(new_data.row_json) AS added
+									FROM
+										new_data),
+								joined_prep AS (
+									SELECT
+										removed_hashes_prep.removed,
+										moved_hashes_prep.moved,
+										new_data_prep.added
+									INTO
+										notify_data
+									FROM
+										removed_hashes_prep
+									JOIN new_data_prep ON
+										(removed_hashes_prep.query_hash =
+											new_data_prep.query_hash)
+									JOIN moved_hashes_prep ON
+										(removed_hashes_prep.query_hash =
+											moved_hashes_prep.query_hash))
+							SELECT
+								JSON_AGG(joined_prep.*)
+							FROM
+								joined_prep;
 
-								RETURN notify_data;
-							END;
-						$$ LANGUAGE PLPGSQL
-					`, this.params)]).then(resolve, reject)
+							RETURN notify_data;
+						END;
+					$$ LANGUAGE PLPGSQL
+				`, this.params)]).then(result => {
+					parent.registerQueryTriggers(this.query, this.updateFunction)
+						.then(tables => {
+							this.tablesUsed = tables;
+
+							// Get initial results
+							parent.waitingToUpdate.push(this.updateFunction);
+
+							resolve()
+					}, reject)
 				}, reject)
-			}).then(result => {
-				// Get initial results
-				parent.waitingToUpdate.push(this.updateFunction)
-
-				parent.registerQueryTriggers(this.query, this.updateFunction)
-					.then(tables => { this.tablesUsed = tables });
-			}, error => this.emit('error', error));
+			})
+			});
 
 			parent.resultCache[this.updateFunction] = { data: [], init: this.init };
 		}
