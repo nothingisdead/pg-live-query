@@ -10,7 +10,7 @@ var querySequence = require('./querySequence');
 const THROTTLE_INTERVAL = 100;
 
 class PgTriggers extends EventEmitter {
-	constructor(connectionString, channel, hashTable) {
+	constructor(connectionString, channel) {
 		this.connectionString  = connectionString;
 		this.channel           = channel;
 		this.triggerTables     = {};
@@ -294,7 +294,7 @@ class PgTriggers extends EventEmitter {
 			var tmpName  = `tmp_view_${queryHash}`;
 
 			querySequence(this, [
-				`CREATE OR REPLACE TEMP VIEW ${tmpName} AS (${tmpQuery})`,
+				`CREATE OR REPLACE VIEW ${tmpName} AS (${tmpQuery})`,
 				[`SELECT DISTINCT vc.table_name
 					FROM information_schema.view_column_usage vc
 					WHERE view_name = $1`, [ tmpName ] ],

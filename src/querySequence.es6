@@ -72,7 +72,7 @@ module.exports = function(client, debug, queries, callback){
 				reject(error);
 				return callback && callback(error);
 			}
-			sequence[0]()
+			sequence[0]();
 		})
 	})
 }
@@ -82,11 +82,11 @@ module.exports = function(client, debug, queries, callback){
  * Perform a query sequence without a transaction
  */
 module.exports.noTx = function(client, debug, queries, callback) {
-  if(debug instanceof Array){
-    callback = queries;
-    queries = debug;
-    debug = false;
-  }
+	if(debug instanceof Array){
+		callback = queries;
+		queries = debug;
+		debug = false;
+	}
 
 	return new Promise((resolve, reject) => {
 		var results = [];
