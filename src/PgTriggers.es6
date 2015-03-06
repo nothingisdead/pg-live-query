@@ -104,69 +104,56 @@ class PgTriggers extends EventEmitter {
 
 		this.waitingToUpdate.splice(0, updateCount).map(updateFunction => {
 			var cache = this.resultCache[updateFunction];
-			var curHashes, oldHashes, newHashes, addedRows;
+			var curHashes, newHashes, addedRows;
+			var oldHashes = cache.data.map(row => row._hash);
 			// Run hash and result query in same transaction
 			this.getClient((error, client, done) => {
 				if(error) return this.emit('error', error);
 
-				client.query('BEGIN', (error, result) => {
+				client.query(`
+					WITH
+						res AS (${cache.query}),
+						data AS (
+							SELECT
+								MD5(CAST(ROW_TO_JSON(res.*) AS TEXT)) AS _hash,
+								ROW_NUMBER() OVER () AS _index,
+								res.*
+							FROM res),
+						data2 AS (
+							SELECT
+								1 AS _added,
+								data.*
+							FROM data
+							WHERE _hash NOT IN ('${oldHashes.join("','")}'))
+					SELECT
+						data2.*,
+						data._hash AS _hash
+					FROM data
+					LEFT JOIN data2
+						ON (data._index = data2._index)
+				`, cache.params, (error, result) => {
+					done();
 					if(error) return this.emit('error', error);
-					getHashes();
-				})
 
-				var getHashes = () => {
-					client.query(`
-						WITH res AS (${cache.query})
-						SELECT
-							MD5(CAST(ROW_TO_JSON(res.*) AS TEXT)) AS _hash
-						FROM res
-					`, cache.params, (error, result) => {
-						if(error) return rollback(error);
+					curHashes = result.rows.map(row => row._hash);
+					newHashes = curHashes.filter(
+						hash => oldHashes.indexOf(hash) === -1);
 
-						curHashes = result.rows.map(row => row._hash);
-						oldHashes = cache.data.map(row => row._hash);
-						newHashes = curHashes.filter(
-							hash => oldHashes.indexOf(hash) === -1);
-
-						if(newHashes.length) {
-							getRows();
-						}else{
-							commit();
-							addedRows = [];
-							generateDiff();
-						}
-					})
-				}
-
-				var getRows = () => {
-					client.query(`
-						WITH
-							res AS (${cache.query}),
-							res2 AS (
-								SELECT
-									MD5(CAST(ROW_TO_JSON(res.*) AS TEXT)) AS _hash,
-									res.*
-								FROM res)
-						SELECT * from res2
-						WHERE _hash IN ('${newHashes.join("','")}')
-					`, cache.params, (error, result) => {
-						if(error) return rollback(error);
-						// End transaction as soon as possible
-						commit();
-
-						var curHashes2 = curHashes.slice();
-						addedRows = result.rows.map((row, index) => {
+					var curHashes2 = curHashes.slice();
+					addedRows = result.rows
+						.filter(row => row._added === 1)
+						.map((row, index) => {
 							row._index = curHashes2.indexOf(row._hash) + 1;
+							delete row._added;
 
 							// Clear this hash so that duplicate hashes can move forward
 							curHashes2[row._index - 1] = undefined;
 
 							return row;
-						});
+						})
 
-						generateDiff();
-					})
-				}
+					generateDiff();
+				})
 
 				var generateDiff = () => {
 					var movedHashes = curHashes.map((hash, newIndex) => {
@@ -222,24 +209,8 @@ class PgTriggers extends EventEmitter {
 
 					this.emit(updateFunction, diff, rows);
 				}
-
-				var rollback = (error) => {
-					this.emit('error', error);
-					client.query('ROLLBACK', (error, result) => {
-						done();
-						if(error) return this.emit('error', error);
-					})
-				}
-
-				var commit = () => {
-					client.query('COMMIT', (error, result) => {
-						done();
-						if(error) return this.emit('error', error);
-					})
-				}
-			});
-
-		});
+			})
+		})
 	}
 
 	calcUpdatedResultCache(oldResults, diff) {
