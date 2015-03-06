@@ -10,7 +10,7 @@ var querySequence = require('./querySequence');
 const THROTTLE_INTERVAL = 100;
 
 class PgTriggers extends EventEmitter {
-	constructor(connectionString, channel, hashTable) {
+	constructor(connectionString, channel) {
 		this.connectionString  = connectionString;
 		this.channel           = channel;
 		this.triggerTables     = {};
@@ -103,12 +103,12 @@ class PgTriggers extends EventEmitter {
 		if(updateCount === 0) return;
 
 		this.waitingToUpdate.splice(0, updateCount).map(updateFunction => {
-			var cache = this.resultCache[updateFunction];
-			var curHashes, newHashes, addedRows;
-			var oldHashes = cache.data.map(row => row._hash);
 			// Run hash and result query in same transaction
 			this.getClient((error, client, done) => {
 				if(error) return this.emit('error', error);
+				var cache = this.resultCache[updateFunction];
+				var curHashes, newHashes, addedRows;
+				var oldHashes = cache.data.map(row => row._hash);
 
 				client.query(`
 					WITH
@@ -207,6 +207,12 @@ class PgTriggers extends EventEmitter {
 					var rows = cache.data =
 						this.calcUpdatedResultCache(cache.data, diff);
 
+					cache = null;
+					curHashes = null;
+					newHashes = null;
+					addedRows = null;
+					oldHashes = null;
+
 					this.emit(updateFunction, diff, rows);
 				}
 			})
@@ -272,6 +278,9 @@ class PgTriggers extends EventEmitter {
 			]).then(result => {
 				var tables = result[1].rows.map(row => row.table_name);
 				this.cachedQueryTables[queryHash] = tables;
+				queryHash = null;
+				tmpQuery = null;
+				tmpName = null;
 				resolve(tables);
 			}, reject);
 		})

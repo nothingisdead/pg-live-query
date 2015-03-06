@@ -33,6 +33,7 @@ class LiveSelect extends EventEmitter {
 					{ removed: null, moved: null, added: thisCache.data },
 					thisCache.data);
 			}
+			thisCache = null;
 		}else{
 			this.init = new Promise((resolve, reject) => {
 				parent.init.then(result => {
