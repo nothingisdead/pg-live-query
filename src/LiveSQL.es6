@@ -52,6 +52,11 @@ class LiveSQL extends EventEmitter {
 								// No manual trigger for this table
 								&& !(payload.table in  queryBuffer.triggers))
 							|| !queryBuffer.triggers) {
+
+							if(queryBuffer.isSimple) {
+								queryBuffer.notifications.push(payload)
+							}
+
 							this.waitingToUpdate.push(queryHash)
 						}
 					}
@@ -105,8 +110,10 @@ class LiveSQL extends EventEmitter {
 				query,
 				params,
 				triggers,
-				data     : [],
-				handlers : [ onUpdate ]
+				data          : [],
+				handlers      : [ onUpdate ],
+				isSimple      : null,
+				notifications : []
 			}
 
 			let pgHandle = await common.getClient(this.connStr)
@@ -118,6 +125,8 @@ class LiveSQL extends EventEmitter {
 				queryDetails = await common.getQueryDetails(pgHandle.client, query)
 				this.queryDetailsCache[query] = queryDetails
 			}
+
+			this.isSimple = queryDetails.isUpdatable
 
 			for(let table of queryDetails.tablesUsed) {
 				if(!(table in this.tablesUsed)) {
@@ -160,11 +169,24 @@ class LiveSQL extends EventEmitter {
 		let pgHandle = await common.getClient(this.connStr)
 
 		let queryBuffer = this.selectBuffer[queryHash]
-		let diff = await common.getResultSetDiff(
-			pgHandle.client,
-			queryBuffer.data,
-			queryBuffer.query,
-			queryBuffer.params)
+		let diff
+		// XXX: simple queries disabled!
+		if(1===2 && queryBuffer.isSimple === true) {
+			diff = await common.getDiffFromSupplied(
+				pgHandle.client,
+				queryBuffer.notifications.splice(0, queryBuffer.notifications.length),
+				queryBuffer.query,
+				queryBuffer.params
+			)
+		}
+		else{
+			diff = await common.getResultSetDiff(
+				pgHandle.client,
+				queryBuffer.data,
+				queryBuffer.query,
+				queryBuffer.params
+			)
+		}
 
 		pgHandle.done()
 
