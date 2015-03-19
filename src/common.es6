@@ -12,10 +12,8 @@ module.exports = exports = {
 	getClient(connectionString) {
 		return new Promise((resolve, reject) => {
 			pg.connect(connectionString, (error, client, done) => {
-				clients++
 				if(error) reject(error)
 				else resolve({ client, done : function() {
-					clients--
 					done()
 				}})
 			})
