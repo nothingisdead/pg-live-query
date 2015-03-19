@@ -14,7 +14,7 @@ const DURATION = 30 * 60 * 1000
 
 function runCase(caseName) {
 	return new Promise((resolve, reject) => {
-		var child = spawn('node', [
+		var child = spawn('node-debug', [
 			'test/load/',
 			'--conn',
 			options.conn,

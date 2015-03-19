@@ -2,7 +2,8 @@ var EventEmitter = require('events').EventEmitter
 var _            = require('lodash')
 var murmurHash   = require('murmurhash-js').murmur3
 
-var common     = require('./common')
+var common = require('./common')
+var Row    = require('./Row')
 
 // Number of milliseconds between refreshes
 const THROTTLE_INTERVAL = 500
@@ -196,7 +197,12 @@ module.exports = LiveSQL
 function filterHashProperties(diff) {
 	if(diff instanceof Array) {
 		return diff.map(event => {
-			return _.omit(event, '_hash')
+			if(event instanceof Row) {
+				return _.omit(event.get(), '_hash')
+			}
+			else {
+				return _.omit(event, '_hash')
+			}
 		})
 	}
 	// Otherwise, diff is object with arrays for keys

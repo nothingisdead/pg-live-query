@@ -60,8 +60,7 @@ var installPromise = new Promise((resolve, reject) => {
 // Spawn child process
 var childPromise = new Promise((resolve, reject) => {
 	installPromise.then(() => {
-		var child = spawn('node', [
-			'--debug',
+		var child = spawn('node-debug', [
 			'test/load/runner/',
 			JSON.stringify(options),
 			JSON.stringify(settings)
@@ -93,7 +92,7 @@ var childPromise = new Promise((resolve, reject) => {
 					var eventTime = parseInt(data[1], 10)
 					var classId = parseInt(data[2], 10)
 					var refreshCount = parseInt(data[3], 10)
-					var scoreIds = data[4].split(',').map(scoreDetails => 
+					var scoreIds = data[4].split(',').map(scoreDetails =>
 						scoreDetails.split('@').map(num => parseInt(num, 10)))
 					var responseTimes = null
 
@@ -336,7 +335,7 @@ process.on('SIGINT', () => {
 			}else{
 				cur[cur.length - 1]+=evt.responseTimes.length
 			}
-			return cur 
+			return cur
 		}, []).map((count, secondNumber) => [ secondNumber, count ])
 
 		console.log(babar(respPrep, {

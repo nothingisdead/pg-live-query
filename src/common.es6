@@ -1,6 +1,7 @@
 var _            = require('lodash')
 var pg           = require('pg')
 var randomString = require('random-strings')
+var Row          = require('./Row')
 
 module.exports = exports = {
 
@@ -151,7 +152,7 @@ module.exports = exports = {
 	 * @return Promise Object      Enumeration of differences
 	 */
 	async getResultSetDiff(client, currentData, query, params) {
-		var oldHashes = currentData.map(row => row._hash)
+		var oldHashes = currentData.map(row => row.get()._hash)
 
 		var result = await exports.performQuery(client, `
 			WITH
@@ -252,7 +253,7 @@ module.exports = exports = {
 	 * @return Array       New result set
 	 */
 	applyDiff(data, diff) {
-		var newResults = data.slice()
+		var newResults = data.slice().map(row => row.get())
 
 		diff.removed !== null && diff.removed
 			.forEach(removed => newResults[removed._index - 1] = undefined)
@@ -263,13 +264,13 @@ module.exports = exports = {
 		});
 
 		diff.copied !== null && diff.copied.forEach(copied => {
-			var copyRow = _.clone(data[copied.orig_index - 1])
+			var copyRow = _.clone(data[copied.orig_index - 1].get())
 			copyRow._index = copied.new_index
 			newResults[copied.new_index - 1] = copyRow
 		});
 
 		diff.moved !== null && diff.moved.forEach(moved => {
-			var movingRow = data[moved.old_index - 1]
+			var movingRow = data[moved.old_index - 1].get()
 			movingRow._index = moved.new_index
 			newResults[moved.new_index - 1] = movingRow
 		});
@@ -277,7 +278,7 @@ module.exports = exports = {
 		diff.added !== null && diff.added
 			.forEach(added => newResults[added._index - 1] = added)
 
-		return newResults.filter(row => row !== undefined)
+		return newResults.filter(row => row !== undefined).map((row, index) => new Row(index + 1, row))
 	},
 
 }
