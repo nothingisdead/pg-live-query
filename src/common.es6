@@ -2,8 +2,6 @@ var _            = require('lodash')
 var pg           = require('pg')
 var randomString = require('random-strings')
 
-var rows = {}
-
 module.exports = exports = {
 
 	/**
@@ -14,8 +12,12 @@ module.exports = exports = {
 	getClient(connectionString) {
 		return new Promise((resolve, reject) => {
 			pg.connect(connectionString, (error, client, done) => {
+				clients++
 				if(error) reject(error)
-				else resolve({ client, done })
+				else resolve({ client, done : function() {
+					clients--
+					done()
+				}})
 			})
 		})
 	},
@@ -256,8 +258,15 @@ module.exports = exports = {
 	applyDiff(data, diff) {
 		var newResults = data.slice()
 
-		diff.removed !== null && diff.removed
-			.forEach(removed => newResults[removed._index - 1] = undefined)
+		diff.removed !== null && diff.removed.forEach(removed => {
+			refs[removed._hash]--
+			newResults[removed._index - 1] = undefined
+
+			if(!refs[removed._hash]) {
+				delete refs[removed._hash]
+				delete rows[removed._hash]
+			}
+		})
 
 		// Deallocate first to ensure no overwrites
 		diff.moved !== null && diff.moved.forEach(moved => {
@@ -265,6 +274,7 @@ module.exports = exports = {
 		});
 
 		diff.copied !== null && diff.copied.forEach(copied => {
+			refs[copied._hash]++
 			newResults[copied.new_index - 1] = data[copied.orig_index - 1]
 		});
 
@@ -273,7 +283,11 @@ module.exports = exports = {
 		});
 
 		diff.added !== null && diff.added.forEach(added => {
-			rows[added._hash] = Object.freeze(_.omit(added, ['_hash', '_index']))
+			if(!refs[added._hash]) {
+				rows[added._hash] = Object.freeze(_.omit(added, ['_hash', '_index']))
+			}
+
+			refs[added._hash]++
 			newResults[added._index - 1] = added._hash
 		})
 

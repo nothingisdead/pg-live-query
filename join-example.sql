@@ -16,7 +16,7 @@ SET default_tablespace = '';
 SET default_with_oids = false;
 
 --
--- Name: assignments; Type: TABLE; Schema: public; Owner: meteor; Tablespace: 
+-- Name: assignments; Type: TABLE; Schema: public; Owner: meteor; Tablespace:
 --
 
 CREATE TABLE assignments (
@@ -51,7 +51,7 @@ ALTER SEQUENCE assignments_id_seq OWNED BY assignments.id;
 
 
 --
--- Name: scores; Type: TABLE; Schema: public; Owner: meteor; Tablespace: 
+-- Name: scores; Type: TABLE; Schema: public; Owner: meteor; Tablespace:
 --
 
 CREATE TABLE scores (
@@ -86,7 +86,7 @@ ALTER SEQUENCE scores_id_seq OWNED BY scores.id;
 
 
 --
--- Name: students; Type: TABLE; Schema: public; Owner: meteor; Tablespace: 
+-- Name: students; Type: TABLE; Schema: public; Owner: meteor; Tablespace:
 --
 
 CREATE TABLE students (
@@ -202,7 +202,7 @@ SELECT pg_catalog.setval('students_id_seq', 2, true);
 
 
 --
--- Name: assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace: 
+-- Name: assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace:
 --
 
 ALTER TABLE ONLY assignments
@@ -210,7 +210,7 @@ ALTER TABLE ONLY assignments
 
 
 --
--- Name: scores_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace: 
+-- Name: scores_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace:
 --
 
 ALTER TABLE ONLY scores
@@ -218,7 +218,7 @@ ALTER TABLE ONLY scores
 
 
 --
--- Name: students_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace: 
+-- Name: students_pkey; Type: CONSTRAINT; Schema: public; Owner: meteor; Tablespace:
 --
 
 ALTER TABLE ONLY students
