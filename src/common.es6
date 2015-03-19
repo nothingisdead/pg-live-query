@@ -253,7 +253,7 @@ module.exports = exports = {
 	 * @return Array       New result set
 	 */
 	applyDiff(data, diff) {
-		var newResults = data.slice().map(row => row.get())
+		var newResults = data.slice()
 
 		diff.removed !== null && diff.removed
 			.forEach(removed => newResults[removed._index - 1] = undefined)
@@ -264,21 +264,19 @@ module.exports = exports = {
 		});
 
 		diff.copied !== null && diff.copied.forEach(copied => {
-			var copyRow = _.clone(data[copied.orig_index - 1].get())
-			copyRow._index = copied.new_index
-			newResults[copied.new_index - 1] = copyRow
+			var index = copied.new_index;
+			newResults[index - 1] = new Row(index, data[copied.orig_index - 1])
 		});
 
 		diff.moved !== null && diff.moved.forEach(moved => {
-			var movingRow = data[moved.old_index - 1].get()
-			movingRow._index = moved.new_index
-			newResults[moved.new_index - 1] = movingRow
+			var index = moved.new_index;
+			newResults[index - 1] = new Row(index, data[moved.old_index - 1])
 		});
 
 		diff.added !== null && diff.added
-			.forEach(added => newResults[added._index - 1] = added)
+			.forEach(added => newResults[added._index - 1] = new Row(added._index, added))
 
-		return newResults.filter(row => row !== undefined).map((row, index) => new Row(index + 1, row))
+		return newResults.filter(row => row !== undefined)
 	},
 
 }
