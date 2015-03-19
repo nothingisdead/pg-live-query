@@ -39,6 +39,8 @@ exports.variousQueries = function(test) {
 						_.forOwn(event, (data, eventType) => {
 							printDebug && console.log('EVENT', eventType, updateLog.length)
 
+							let keepIndexes = false
+
 							switch(eventType){
 								case 'perform':
 									nextLogPos = updateLog.length
@@ -58,7 +60,12 @@ exports.variousQueries = function(test) {
 										})
 									})
 								case 'diff':
+									keepIndexes = true
 								case 'data':
+									if(!keepIndexes) {
+										data = data.map(row => _.omit(row, '_index'))
+									}
+
 									if(updateLog.length === nextLogPos) {
 										// No update yet since action
 										setTimeout(() => {

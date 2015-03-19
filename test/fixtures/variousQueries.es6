@@ -61,7 +61,7 @@ exports.cases.innerJoin = {
 			removed: null,
 			moved: null,
 			copied: null,
-			added: 
+			added:
 			 [ { _index: 1,
 					 student_name: 'Student 2',
 					 name: 'Assignment 1',
@@ -85,7 +85,7 @@ exports.cases.innerJoin = {
 			removed: null,
 			moved: null,
 			copied: null,
-			added: 
+			added:
 			 [ { _index: 4,
 					 student_name: 'Student 1',
 					 name: 'Assignment 2',
@@ -104,7 +104,7 @@ exports.cases.innerJoin = {
 			removed: [ { _index: 4 } ],
 			moved: null,
 			copied: null,
-			added: 
+			added:
 			 [ { _index: 4,
 					 student_name: 'Student 1',
 					 name: 'Assignment 2',
@@ -117,7 +117,7 @@ exports.cases.innerJoin = {
 			removed: [ { _index: 1 } ],
 			moved: null,
 			copied: null,
-			added: 
+			added:
 			 [ { _index: 1,
 					 student_name: 'John Doe',
 					 name: 'Assignment 1',
@@ -446,7 +446,7 @@ exports.cases.inExpression = {
 				removed: null,
 				moved: null,
 				copied: null,
-				added: 
+				added:
 				 [ { _index: 1, is_54: false },
 					 { _index: 2, is_54: true },
 					 { _index: 3, is_54: false } ] } },
@@ -479,7 +479,7 @@ exports.cases.allExpression = {
 				removed: null,
 				moved: null,
 				copied: null,
-				added: 
+				added:
 				 [ { _index: 1, is_lte_28: false },
 					 { _index: 2, is_lte_28: false },
 					 { _index: 3, is_lte_28: true } ] } },

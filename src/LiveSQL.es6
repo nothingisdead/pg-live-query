@@ -3,7 +3,6 @@ var _            = require('lodash')
 var murmurHash   = require('murmurhash-js').murmur3
 
 var common = require('./common')
-var Row    = require('./Row')
 
 // Number of milliseconds between refreshes
 const THROTTLE_INTERVAL = 500
@@ -170,9 +169,11 @@ class LiveSQL extends EventEmitter {
 		if(diff !== null) {
 			queryBuffer.data = common.applyDiff(queryBuffer.data, diff)
 
+			let rows = queryBuffer.data.map((hash, index) => common.getRow(hash))
+
 			for(let updateHandler of queryBuffer.handlers) {
 				updateHandler(
-					filterHashProperties(diff), filterHashProperties(queryBuffer.data))
+					filterHashProperties(diff), rows)
 			}
 		}
 	}
@@ -197,12 +198,7 @@ module.exports = LiveSQL
 function filterHashProperties(diff) {
 	if(diff instanceof Array) {
 		return diff.map(event => {
-			if(event instanceof Row) {
-				return _.omit(event.get(), '_hash')
-			}
-			else {
-				return _.omit(event, '_hash')
-			}
+			return _.omit(event, '_hash')
 		})
 	}
 	// Otherwise, diff is object with arrays for keys

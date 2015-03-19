@@ -7,7 +7,7 @@ liveDb.on('error', function(error) {
 	console.error(error)
 })
 
-var selectCount = 
+var selectCount =
 	settings.maxSelects && settings.maxSelects < settings.init.classCount ?
 		settings.maxSelects : settings.init.classCount
 
