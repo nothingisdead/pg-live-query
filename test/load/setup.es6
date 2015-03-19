@@ -3,7 +3,7 @@ var _ = require('lodash')
 var pg = require('pg')
 var babar = require('babar')
 var stats = require('simple-statistics')
-var spawn = require('child_process').spawn
+var fork = require('child_process').fork
 
 var scoresLoadFixture = require('../fixtures/scoresLoad')
 
@@ -60,9 +60,10 @@ var installPromise = new Promise((resolve, reject) => {
 // Spawn child process
 var childPromise = new Promise((resolve, reject) => {
 	installPromise.then(() => {
-		var child = spawn('node', [
-			'--debug',
-			'test/load/runner/',
+		// Work-around to enable debugger on fork
+		process.execArgv.push('--debug')
+
+		var child = fork('test/load/runner', [
 			JSON.stringify(options),
 			JSON.stringify(settings)
 		])
@@ -74,46 +75,33 @@ var childPromise = new Promise((resolve, reject) => {
 			console.time('Initialized each select instance')
 		}
 
-		child.stdout.on('data', data => {
-			data = data.toString().split(' ')
-			switch(data[0]) {
+		child.on('message', msg => {
+			switch(msg.type) {
 				case 'MEMORY_USAGE':
-					memoryUsage.push({
-						time: parseInt(data[1], 10),
-						memory: parseInt(data[2], 10),
-						memoryUsed: parseInt(data[3], 10)
-					})
+					memoryUsage.push(msg)
 					break
 				case 'NEXT_EVENT':
 					// Unit tests will give times
-					eventTimes.push(parseInt(data[1], 10))
+					eventTimes.push(msg.time)
 					break
 				case 'CLASS_UPDATE':
 					// Default "end-to-end" load test mode will log score updates
-					var eventTime = parseInt(data[1], 10)
-					var classId = parseInt(data[2], 10)
-					var refreshCount = parseInt(data[3], 10)
-					var scoreIds = data[4].split(',').map(scoreDetails => 
-						scoreDetails.split('@').map(num => parseInt(num, 10)))
 					var responseTimes = null
-
-// 					classUpdates.length > selectCount &&
-// 						console.log('UPin', classId, eventTime, scoreIds)
 
 					if(waitingOps.length !== 0){
 						var myOps = waitingOps.filter(op =>
-							scoreIds.filter(score =>
-								score[0] === op.scoreId && score[1] >= op.score).length !== 0)
+							msg.scores.filter(item =>
+								item.id === op.scoreId && item.score >= op.score).length !== 0)
 						// Remove myOps from the global wait list
 						waitingOps = waitingOps.filter(op => myOps.indexOf(op) === -1)
 
 						// Calculate response time
-						responseTimes = myOps.map(op => eventTime - op.time)
+						responseTimes = myOps.map(op => msg.time - op.time)
 					}
 
 					classUpdates.push({
-						time: eventTime,
-						refreshCount,
+						time: msg.time,
+						refreshCount: msg.refreshCount,
 						responseTimes
 					})
 
@@ -125,7 +113,7 @@ var childPromise = new Promise((resolve, reject) => {
 					}
 					break
 				default:
-					console.log('stdout', data)
+					console.log('UNEXPECTED_MESSAGE', msg)
 					break
 			}
 		})
@@ -277,7 +265,7 @@ process.on('SIGINT', () => {
 		var firstMemTime = memoryUsage[0].time
 		var memoryPrep = memoryUsage.map(record => [
 			(record.time - firstMemTime) / 1000,
-			Math.round(record.memory / Math.pow(1024, 2) * 10 ) / 10
+			Math.round(record.total / Math.pow(1024, 2) * 10 ) / 10
 		])
 
 		console.log(babar(memoryPrep, {
@@ -286,7 +274,7 @@ process.on('SIGINT', () => {
 
 		var memory2Prep = memoryUsage.map(record => [
 			(record.time - firstMemTime) / 1000,
-			Math.round(record.memoryUsed / Math.pow(1024, 2) * 10 ) / 10
+			Math.round(record.used / Math.pow(1024, 2) * 10 ) / 10
 		])
 
 		console.log(babar(memory2Prep, {

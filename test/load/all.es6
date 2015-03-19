@@ -1,5 +1,5 @@
 var fs = require('fs')
-var spawn = require('child_process').spawn
+var fork = require('child_process').fork
 
 var _ = require('lodash')
 
@@ -14,8 +14,7 @@ const DURATION = 30 * 60 * 1000
 
 function runCase(caseName) {
 	return new Promise((resolve, reject) => {
-		var child = spawn('node', [
-			'test/load/',
+		var child = fork('test/load/', [
 			'--conn',
 			options.conn,
 			'--channel',

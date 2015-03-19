@@ -64,17 +64,22 @@ module.exports = _.flatten(_.range(settings.instanceMultiplier || 1)
 	.map(instance => _.range(selectCount).map(index => {
 
 	var select = liveClassScores(liveDb, index + 1, (diff, rows) => {
-		var scoreIds = ''
+		var scoreIds = null
 		if(diff.added) {
-			scoreIds = diff.added.map(row => row.score_id + '@' + row.score).join(',')
+			scoreIds = diff.added.map(row => {
+				return {
+					id: row.score_id,
+					score: row.score
+				}
+			})
 		}
-		process.stdout.write([
-			'CLASS_UPDATE',
-			Date.now(),
-			index + 1,
-			liveDb.refreshCount,
-			scoreIds
-		].join(' '))
+		process.send({
+			type: 'CLASS_UPDATE',
+			time: Date.now(),
+			classId: index + 1,
+			refreshCount: liveDb.refreshCount,
+			scores: scoreIds
+		})
 	})
 
 	return select

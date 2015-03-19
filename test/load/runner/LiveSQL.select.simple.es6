@@ -26,17 +26,22 @@ module.exports = _.flatten(_.range(settings.instanceMultiplier || 1)
 			ORDER BY
 				id ASC
 		`, (diff, rows) => {
-			var scoreIds = ''
+			var scoreIds = null
 			if(diff.added) {
-				scoreIds = diff.added.map(row => row.id + '@' + row.score).join(',')
+				scoreIds = diff.added.map(row => {
+					return {
+						id: row.score_id,
+						score: row.score
+					}
+				})
 			}
-			process.stdout.write([
-				'CLASS_UPDATE',
-				Date.now(),
-				index + 1,
-				liveDb.refreshCount,
-				scoreIds
-			].join(' '))
+			process.send({
+				type: 'CLASS_UPDATE',
+				time: Date.now(),
+				classId: index + 1,
+				refreshCount: liveDb.refreshCount,
+				scores: scoreIds
+			})
 		})
 	})
 

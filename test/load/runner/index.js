@@ -13,7 +13,10 @@ if(typeof runner === 'function') {
 	var SLEEP_DURATION = 10
 
 	var runAgain = function() {
-		process.stdout.write(['NEXT_EVENT', Date.now()].join(' '))
+		process.send({
+			type: 'NEXT_EVENT',
+			time: Date.now()
+		})
 		performOperationForever()
 	}
 
@@ -34,11 +37,11 @@ if(typeof runner === 'function') {
 
 setInterval(function() {
 	var mem = process.memoryUsage()
-	process.stdout.write([
-		'MEMORY_USAGE',
-		Date.now(),
-		mem.heapTotal,
-		mem.heapUsed,
-	].join(' '))
+	process.send({
+		type: 'MEMORY_USAGE',
+		time: Date.now(),
+		total: mem.heapTotal,
+		used: mem.heapUsed,
+	})
 }, 500)
 
