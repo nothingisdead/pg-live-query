@@ -2,6 +2,9 @@ var _            = require('lodash')
 var pg           = require('pg')
 var randomString = require('random-strings')
 
+var rows = {}
+var refs = {}
+
 module.exports = exports = {
 
 	/**
@@ -13,9 +16,7 @@ module.exports = exports = {
 		return new Promise((resolve, reject) => {
 			pg.connect(connectionString, (error, client, done) => {
 				if(error) reject(error)
-				else resolve({ client, done : function() {
-					done()
-				}})
+				else resolve({ client, done })
 			})
 		})
 	},
@@ -261,8 +262,8 @@ module.exports = exports = {
 			newResults[removed._index - 1] = undefined
 
 			if(!refs[removed._hash]) {
-				delete refs[removed._hash]
-				delete rows[removed._hash]
+					delete refs[removed._hash]
+					delete rows[removed._hash]
 			}
 		})
 
@@ -272,6 +273,10 @@ module.exports = exports = {
 		});
 
 		diff.copied !== null && diff.copied.forEach(copied => {
+			if(!copied._hash in refs) {
+				refs[copied._hash] = 0
+			}
+
 			refs[copied._hash]++
 			newResults[copied.new_index - 1] = data[copied.orig_index - 1]
 		});
@@ -281,8 +286,12 @@ module.exports = exports = {
 		});
 
 		diff.added !== null && diff.added.forEach(added => {
-			if(!refs[added._hash]) {
+			if(!(added._hash in refs)) {
 				rows[added._hash] = Object.freeze(_.omit(added, ['_hash', '_index']))
+			}
+
+			if(!(added._hash in refs)) {
+				refs[added._hash] = 0
 			}
 
 			refs[added._hash]++
