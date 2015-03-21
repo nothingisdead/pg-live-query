@@ -15,14 +15,44 @@ class LiveSQL extends EventEmitter {
 		this.notifyHandle    = null
 		this.updateInterval  = null
 		this.waitingToUpdate = []
-		this.selectBuffer    = {}
-		this.tablesUsed      = {}
-		this.queryDetailsCache = {}
+		this.selectBuffer    = []
+		this.tablesUsed      = []
+		this.queryDetailsCache = []
 		// DEBUG HELPER
 		this.refreshCount    = 0
 		this.notifyCount     = 0
 
 		this.ready = this.init()
+	}
+
+	getQueryBuffer(queryHash) {
+		var queryBuffer = this.selectBuffer.filter(buffer =>
+			buffer.hash === queryHash)
+
+		if(queryBuffer.length !== 0)
+			return queryBuffer[0]
+
+		return null
+	}
+
+	getDetailsCache(query) {
+		var detailsCache = this.queryDetailsCache.filter(cache =>
+			cache.query === query)
+
+		if(detailsCache.length !== 0)
+			return detailsCache[0]
+
+		return null
+	}
+
+	getTableQueries(table) {
+		var tableQueries = this.tablesUsed.filter(item =>
+			item.table === table)
+
+		if(tableQueries.length !== 0)
+			return tableQueries[0]
+
+		return null
 	}
 
 	async init() {
@@ -43,9 +73,10 @@ class LiveSQL extends EventEmitter {
 						new Error('INVALID_NOTIFICATION ' + info.payload))
 				}
 
-				if(payload.table in this.tablesUsed) {
-					for(let queryHash of this.tablesUsed[payload.table]) {
-						let queryBuffer = this.selectBuffer[queryHash]
+				let tableQueries = this.getTableQueries(payload.table)
+				if(tableQueries !== null) {
+					for(let queryHash of tableQueries.queries) {
+						let queryBuffer = this.getQueryBuffer(queryHash)
 						if((queryBuffer.triggers
 								// Check for true response from manual trigger
 								&& payload.table in queryBuffer.triggers
@@ -91,18 +122,17 @@ class LiveSQL extends EventEmitter {
 		if(typeof query !== 'string')
 			throw new Error('QUERY_STRING_MISSING')
 		if(!(params instanceof Array))
-			throw new ERROR('PARAMS_ARRAY_MISMATCH')
+			throw new Error('PARAMS_ARRAY_MISMATCH')
 		if(typeof onUpdate !== 'function')
 			throw new Error('UPDATE_FUNCTION_MISSING')
 
 		let queryHash = murmurHash(JSON.stringify([ query, params ]))
+		let queryBuffer = this.getQueryBuffer(queryHash)
 
-		if(queryHash in this.selectBuffer) {
-			let queryBuffer = this.selectBuffer[queryHash]
-
+		if(queryBuffer !== null) {
 			queryBuffer.handlers.push(onUpdate)
 
-			if(bufferData.length !== 0) {
+			if(queryBuffer.data.length !== 0) {
 				// Initial results from cache
 				onUpdate(
 					{ removed: null, moved: null, copied: null, added: queryBuffer.data },
@@ -111,10 +141,11 @@ class LiveSQL extends EventEmitter {
 		}
 		else {
 			// Initialize result set cache
-			let newBuffer = this.selectBuffer[queryHash] = {
+			let newBuffer = {
 				query,
 				params,
 				triggers,
+				hash          : queryHash,
 				data          : [],
 				handlers      : [ onUpdate ],
 				// Queries that have parsed property are simple and may be updated
@@ -123,14 +154,22 @@ class LiveSQL extends EventEmitter {
 				notifications : []
 			}
 
+			this.selectBuffer.push(newBuffer)
+
 			let pgHandle = await common.getClient(this.connStr)
+			let detailsCache = this.getDetailsCache(query)
 			let queryDetails
-			if(query in this.queryDetailsCache) {
-				queryDetails = this.queryDetailsCache[query]
+
+			if(detailsCache !== null) {
+				queryDetails = detailsCache.data
 			}
 			else {
 				queryDetails = await common.getQueryDetails(pgHandle.client, query)
-				this.queryDetailsCache[query] = queryDetails
+
+				this.queryDetailsCache.push({
+					query,
+					data: queryDetails
+				})
 			}
 
 			if(queryDetails.isUpdatable) {
@@ -151,12 +190,16 @@ class LiveSQL extends EventEmitter {
 			}
 
 			for(let table of queryDetails.tablesUsed) {
-				if(!(table in this.tablesUsed)) {
-					this.tablesUsed[table] = [ queryHash ]
+				let tableQueries = this.getTableQueries(table)
+				if(tableQueries === null) {
+					this.tablesUsed.push({
+						table,
+						queries: [ queryHash ]
+					})
 					await common.createTableTrigger(pgHandle.client, table, this.channel)
 				}
-				else if(this.tablesUsed[table].indexOf(queryHash) === -1) {
-					this.tablesUsed[table].push(queryHash)
+				else if(tableQueries.queries.indexOf(queryHash) === -1) {
+					tableQueries.queries.push(queryHash)
 				}
 			}
 
@@ -167,18 +210,18 @@ class LiveSQL extends EventEmitter {
 		}
 
 		let stop = async function() {
-			let queryBuffer = this.selectBuffer[queryHash]
+			let queryBuffer = this.getQueryBuffer(queryHash)
 
 			if(queryBuffer) {
 				_.pull(queryBuffer.handlers, onUpdate)
 
 				if(queryBuffer.handlers.length === 0) {
 					// No more query/params like this, remove from buffers
-					delete this.selectBuffer[queryHash]
+					_.pull(this.selectBuffer, queryBuffer)
 					_.pull(this.waitingToUpdate, queryHash)
 
-					for(let table of Object.keys(this.tablesUsed)) {
-						_.pull(this.tablesUsed[table], queryHash)
+					for(let item of this.tablesUsed) {
+						_.pull(item.queries, queryHash)
 					}
 				}
 			}
@@ -191,7 +234,7 @@ class LiveSQL extends EventEmitter {
 	async _updateQuery(queryHash) {
 		let pgHandle = await common.getClient(this.connStr)
 
-		let queryBuffer = this.selectBuffer[queryHash]
+		let queryBuffer = this.getQueryBuffer(queryHash)
 		let update
 		if(queryBuffer.parsed !== null
 			// Notifications array will be empty for initial results
@@ -234,8 +277,8 @@ class LiveSQL extends EventEmitter {
 
 		let pgHandle = await common.getClient(this.connStr)
 
-		for(let table of Object.keys(this.tablesUsed)) {
-			await common.dropTableTrigger(pgHandle.client, table, this.channel)
+		for(let item of this.tablesUsed) {
+			await common.dropTableTrigger(pgHandle.client, item.table, this.channel)
 		}
 
 		pgHandle.done()
