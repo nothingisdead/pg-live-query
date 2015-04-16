@@ -38,7 +38,7 @@ setInterval(function() {
 		'MEMORY_USAGE',
 		Date.now(),
 		mem.heapTotal,
-		mem.heapUsed,
+		mem.heapUsed
 	].join(' '))
 }, 500)
 

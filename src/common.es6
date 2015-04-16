@@ -2,6 +2,8 @@ var _            = require('lodash')
 var pg           = require('pg')
 var randomString = require('random-strings')
 
+var collectionDiff = require('./collectionDiff')
+
 module.exports = exports = {
 
 	/**
@@ -35,11 +37,16 @@ module.exports = exports = {
 		})
 	},
 
+	delay(duration=0) {
+		return new Promise((resolve, reject) => setTimeout(resolve, duration))
+	},
+
 	/**
-	 * Query information_schema to determine tables used and if updatable
+	 * Query information_schema to determine tables used
 	 * @param  Object client node-postgres client
 	 * @param  String query  SQL statement, params not used
 	 * @return Promise Array Table names
+	 * TODO change to EXPLAIN?
 	 */
 	async getQueryDetails(client, query) {
 		var nullifiedQuery = query.replace(/\$\d+/g, 'NULL')
@@ -53,17 +60,9 @@ module.exports = exports = {
 				FROM information_schema.view_column_usage vc
 				WHERE view_name = $1`, [ viewName ])
 
-		var isUpdatableResult = await exports.performQuery(client,
-			`SELECT is_updatable
-				FROM information_schema.views
-				WHERE table_name = $1`, [ viewName ])
-
 		await exports.performQuery(client, `DROP VIEW ${viewName}`)
 
-		return {
-			isUpdatable: isUpdatableResult.rows[0].is_updatable === 'YES',
-			tablesUsed: tablesResult.rows.map(row => row.table_name)
-		}
+		return tablesResult.rows.map(row => row.table_name)
 	},
 
 	/**
@@ -72,6 +71,7 @@ module.exports = exports = {
 	 * @param  String table   Name of table to install trigger
 	 * @param  String channel NOTIFY channel
 	 * @return Promise true   Successful
+	 * TODO notification pagination at 8000 bytes
 	 */
 	async createTableTrigger(client, table, channel) {
 		var triggerName = `${channel}_${table}`
@@ -158,9 +158,9 @@ module.exports = exports = {
 				res AS (${query}),
 				data AS (
 					SELECT
+						res.*,
 						MD5(CAST(ROW_TO_JSON(res.*) AS TEXT)) AS _hash,
-						ROW_NUMBER() OVER () AS _index,
-						res.*
+						ROW_NUMBER() OVER () AS _index
 					FROM res),
 				data2 AS (
 					SELECT
@@ -175,74 +175,13 @@ module.exports = exports = {
 			LEFT JOIN data2
 				ON (data._index = data2._index)`, params)
 
-		var curHashes = result.rows.map(row => row._hash)
-		var newHashes = curHashes.filter(hash => oldHashes.indexOf(hash) === -1)
+		var diff = collectionDiff(oldHashes, result.rows)
 
-		// Need copy of curHashes so duplicates can be checked off
-		var curHashes2 = curHashes.slice()
-		var addedRows = result.rows
-			.filter(row => row._added === 1)
-			.map(row => {
-				// Prepare row meta-data
-				row._index = curHashes2.indexOf(row._hash) + 1
-				delete row._added
+		if(diff === null) return null
 
-				// Clear this hash so that duplicate hashes can move forward
-				curHashes2[row._index - 1] = undefined
+		var newData = exports.applyDiff(currentData, diff)
 
-				return row
-			})
-
-		var movedHashes = curHashes.map((hash, newIndex) => {
-			let oldIndex = oldHashes.indexOf(hash)
-
-			if(oldIndex !== -1 &&
-					oldIndex !== newIndex &&
-					curHashes[oldIndex] !== hash) {
-				return {
-					old_index: oldIndex + 1,
-					new_index: newIndex + 1,
-					_hash: hash
-				}
-			}
-		}).filter(moved => moved !== undefined)
-
-		var removedHashes = oldHashes
-			.map((_hash, index) => { return { _hash, _index: index + 1 } })
-			.filter(removed =>
-				curHashes[removed._index - 1] !== removed._hash &&
-				movedHashes.filter(moved =>
-					moved.new_index === removed._index).length === 0)
-
-		// Add rows that have already existing hash but in new places
-		var copiedHashes = curHashes.map((hash, index) => {
-			var oldHashIndex = oldHashes.indexOf(hash)
-			if(oldHashIndex !== -1 &&
-					oldHashes[index] !== hash &&
-					movedHashes.filter(moved =>
-						moved.new_index - 1 === index).length === 0 &&
-					addedRows.filter(added =>
-						added._index - 1 === index).length === 0){
-				return {
-					new_index: index + 1,
-					orig_index: oldHashIndex + 1
-				}
-			}
-		}).filter(copied => copied !== undefined)
-
-		var diff = {
-			removed: removedHashes.length !== 0 ? removedHashes : null,
-			moved: movedHashes.length !== 0 ? movedHashes: null,
-			copied: copiedHashes.length !== 0 ? copiedHashes: null,
-			added: addedRows.length !== 0 ? addedRows : null
-		}
-
-		if(diff.added === null &&
-				diff.moved === null &&
-				diff.copied === null &&
-				diff.removed === null) return null
-
-		return diff
+		return { diff, data: newData }
 	},
 
 	/**

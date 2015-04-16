@@ -1,11 +1,16 @@
 var EventEmitter = require('events').EventEmitter
-var util = require('util')
-var LivePG = require('./LivePG')
+var _ = require('lodash')
+var LivePG = require('../../../')
 
-const CONN_STR = 'postgres://meteor:meteor@127.0.0.1/meteor'
-const CHANNEL = 'ben_test'
+var liveDb = global.liveDb = new LivePG(options.conn, options.channel)
 
-var liveDb = new LivePG(CONN_STR, CHANNEL)
+liveDb.on('error', function(error) {
+	console.error(error)
+})
+
+var selectCount = 
+	settings.maxSelects && settings.maxSelects < settings.init.classCount ?
+		settings.maxSelects : settings.init.classCount
 
 class liveClassScores extends EventEmitter {
 	constructor(liveDb, classId) {
@@ -62,16 +67,24 @@ class liveClassScores extends EventEmitter {
 	}
 }
 
-var scoresHandle = new liveClassScores(liveDb, 1)
+module.exports = _.flatten(_.range(settings.instanceMultiplier || 1)
+	.map(instance => _.range(selectCount).map(index => {
 
-scoresHandle.on('update', (diff, rows) => {
-	console.log(util.inspect(diff, { depth: null }), rows)
-})
+	var select = new liveClassScores(liveDb, index + 1)
 
-// Ctrl+C
-process.on('SIGINT', async function() {
-	scoresHandle.stop()
-	await liveDb.cleanup()
-	process.exit()
-})
+	select.on('update', (diff, rows) => {
+		var scoreIds = ''
+		if(diff.added) {
+			scoreIds = diff.added.map(row => row.score_id + '@' + row.score).join(',')
+		}
+		process.stdout.write([
+			'CLASS_UPDATE',
+			Date.now(),
+			index + 1,
+			scoreIds
+		].join(' '))
+	})
+
+	return select
+})))
 

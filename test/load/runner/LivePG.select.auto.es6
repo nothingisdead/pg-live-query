@@ -1,7 +1,7 @@
 var _ = require('lodash')
-var LiveSQL = require('../../../')
+var LivePG = require('../../../')
 
-var liveDb = new LiveSQL(options.conn, options.channel)
+var liveDb = global.liveDb = new LivePG(options.conn, options.channel)
 
 liveDb.on('error', function(error) {
 	console.error(error)
@@ -33,7 +33,9 @@ module.exports = _.flatten(_.range(settings.instanceMultiplier || 1)
 			assignments.class_id = $1
 		ORDER BY
 			score_id ASC
-	`, [ index + 1 ], (diff, rows) => {
+	`, [ index + 1 ])
+
+	select.on('update', (diff, rows) => {
 		var scoreIds = ''
 		if(diff.added) {
 			scoreIds = diff.added.map(row => row.score_id + '@' + row.score).join(',')
@@ -42,7 +44,6 @@ module.exports = _.flatten(_.range(settings.instanceMultiplier || 1)
 			'CLASS_UPDATE',
 			Date.now(),
 			index + 1,
-			liveDb.refreshCount,
 			scoreIds
 		].join(' '))
 	})

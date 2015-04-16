@@ -17,10 +17,10 @@ global.isLoadTest = process.env.LOAD_TEST === '1'
 require('babel/register')({ playground: true })
 
 var _       = require('lodash')
-var LiveSQL = require('../')
+var LivePG = require('../')
 
 // Define global instance
-global.liveDb   = new LiveSQL(process.env.CONN, process.env.CHANNEL)
+global.liveDb   = new LivePG(process.env.CONN, process.env.CHANNEL)
 
 if(isLoadTest) {
 	module.exports = _.assign(

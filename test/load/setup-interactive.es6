@@ -7,6 +7,10 @@ var spawn = require('child_process').spawn
 
 var scoresLoadFixture = require('../fixtures/scoresLoad')
 
+var clear = function() {
+	process.stdout.write('\u001B[2J\u001B[0;0f')
+}
+
 // For querySequence compatibility with main test suite
 process.env.CONN = options.conn
 
@@ -195,17 +199,15 @@ var performRandom = {
 	}
 }
 
+var opRates = {}
+
 childPromise.then(() => {
 	console.log('\nLoad operations in progress...')
 
-	// Print elapsed time every 15 seconds for easy duration checking
-	var runTimeSeconds = 0
+	// Redraw graphs every second
 	setInterval(() => {
-		runTimeSeconds++
-		if(runTimeSeconds % 5 === 0){
-			process.stdout.write(
-				`\rApproximately ${runTimeSeconds} seconds elapsed...`)
-		}
+		clear()
+		drawOutput()
 	}, 1000)
 
 	var startTime = Date.now()
@@ -220,6 +222,7 @@ childPromise.then(() => {
 			switch(typeof value) {
 				case 'number':
 					// Static value provided
+					opRates[key] = value
 					setInterval(fun, Math.ceil(1000 / value))
 					break
 				case 'function':
@@ -227,45 +230,27 @@ childPromise.then(() => {
 					// Single argument receives (float) number of seconds elapsed
 					var nextOp = () => {
 						fun()
-						setTimeout(nextOp, Math.ceil(1000 / getInterval(value)))
+						opRates[key] = getInterval(value)
+						setTimeout(nextOp, Math.ceil(1000 / opRates[key]))
 					}
-					setTimeout(nextOp, Math.ceil(1000 / getInterval(value)))
+					nextOp()
 					break
 			}
 		})
 	}
 })
 
-
-process.on('SIGINT', () => {
-	clientDone && clientDone()
+function drawOutput() {
+	console.log('Op Per Second:',
+		'insert', opRates.insert, 'update', opRates.update)
 
 	var filteredEvents = classUpdates.filter(evt =>
 		evt.responseTimes !== null && evt.responseTimes.length !== 0)
 
-	console.log(
-		'Final Data Count \n',
-		'Scores: ', fixtureData.scores.length
-	)
-
 	var responseCount = filteredEvents.reduce(
 		(count, evt) => count + evt.responseTimes.length, 0)
 
-	if(settings.opPerSecond) {
-		console.log(
-			'Responses Received: ', responseCount, '\n',
-			'Still Waiting for Response: ', waitingOps.length, '\n'
-		)
-	}
-
-// 	console.log(waitingOps)
-
 	if(memoryUsage.length !== 0){
-		console.log(
-			'Test Duration: ',
-			(memoryUsage[memoryUsage.length - 1].time - memoryUsage[0].time) / 1000,
-			'seconds \n'
-		)
 		// Print memory usage graphs
 		var firstMemTime = memoryUsage[0].time
 		var memoryPrep = memoryUsage.map(record => [
@@ -287,20 +272,6 @@ process.on('SIGINT', () => {
 		}))
 	}
 
-	if(eventTimes.length !== 0) {
-		var eventTimePrep = eventTimes.map((time, index) =>
-			index === 0 ? null : time - eventTimes[index - 1])
-		eventTimePrep.shift()
-		console.log('Event count: ', eventTimes.length)
-		console.table([ 0.05, 0.25, 0.5, 0.75, 0.95, 1 ].map(percentile => {
-			return {
-				'Percentile': percentile * 100,
-				'Time (ms)': Math.round(stats.quantile(eventTimePrep, percentile))
-			}
-		}))
-
-	}
-
 	if(filteredEvents.length !== 0) {
 		// Print response time graph
 		var eventPrep = filteredEvents.map(evt => [
@@ -312,49 +283,11 @@ process.on('SIGINT', () => {
 		console.log(babar(eventPrep, {
 			caption: 'Response Time by Elapsed Time (Milliseconds / Seconds)'
 		}))
-
-		var allResponseTimes = eventPrep.map(evt => evt[1])
-		console.table([ 0.05, 0.25, 0.5, 0.75, 0.95, 1 ].map(percentile => {
-			return {
-				'Percentile': percentile * 100,
-				'Time (ms)': Math.round(stats.quantile(allResponseTimes, percentile))
-			}
-		}))
-
-		// Print responses per second elapsed graph
-		var respPrep = filteredEvents.reduce((cur, evt) => {
-			let evtSecond = Math.ceil((evt.time - firstMemTime) / 1000)
-			if(evtSecond > cur.length) {
-				cur.push(1)
-			}else{
-				cur[cur.length - 1]+=evt.responseTimes.length
-			}
-			return cur 
-		}, []).map((count, secondNumber) => [ secondNumber, count ])
-
-		console.log(babar(respPrep, {
-			caption: 'Responses at Second Elapsed'
-		}))
-
-		var respPrepTable = respPrep.map(evt => evt[1])
-		console.table([ 0.05, 0.25, 0.5, 0.75, 0.95, 1 ].map(percentile => {
-			return {
-				'Percentile': percentile * 100,
-				'Time (ms)': Math.round(stats.quantile(respPrepTable, percentile))
-			}
-		}))
 	}
+}
 
-	if(waitingOps.length !== 0) {
-		var waitingPrepTable = waitingOps.map(op => Date.now() - op.time)
-		console.log('Waiting Operations Wait Times')
-		console.table([ 0.05, 0.25, 0.5, 0.75, 0.95, 1 ].map(percentile => {
-			return {
-				'Percentile': percentile * 100,
-				'Time (ms)': Math.round(stats.quantile(waitingPrepTable, percentile))
-			}
-		}))
-	}
+process.on('SIGINT', () => {
+	clientDone && clientDone()
 
 	process.exit()
 })
