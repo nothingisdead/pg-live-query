@@ -1,5 +1,7 @@
 # pg-live-query
 
+### This package has been deprecated. Please use [pg-live-select](https://www.npmjs.com/package/pg-live-select).
+
 This package exposes the `LiveSQL` class in order to provide realtime result sets for PostgreSQL `SELECT` statements.
 
 ## Implements
