@@ -1,0 +1,32 @@
+{
+  "name": "pg-live-query",
+  "version": "1.0.0",
+  "description": "Subscribe to query updates in PostgreSQL",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nothingisdead/pg-live-query.git"
+  },
+  "keywords": [
+    "postgres",
+    "postgresql",
+    "live",
+    "query",
+    "sql",
+    "update",
+    "realtime"
+  ],
+  "author": "Robert Myers",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nothingisdead/pg-live-query/issues"
+  },
+  "homepage": "https://github.com/nothingisdead/pg-live-query#readme",
+  "dependencies": {
+    "pg": "^6.0.3",
+    "pg-query-parser": "^0.1.0"
+  }
+}
