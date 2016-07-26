@@ -25,28 +25,22 @@ class QueryWatcher {
 			`;
 
 			self.client.query(table_sql, (error, result) => {
-				if(error) {
-					reject(error);
-				}
-				else {
-					resolve(table);
-				}
+				error ? reject(error) : resolve(table);
 			});
 		});
 	}
 
 	// Watch for changes to query results
 	watch(sql) {
-		let self = this;
-
-		return new Promise((resolve, reject) => {
-			self.init(sql).then((table) => {
-				self.uid.addMetaColumns(sql).then((sql) => {
-					resolve({
-						update : self.update.bind(self, table, sql)
-					});
-				}, reject);
-			}, reject);
+		// Make sure we have initialized the state change table
+		return this.init(sql).then((table) => {
+			// Add the meta columns to this query
+			return this.uid.addMetaColumns(sql).then((sql) => {
+				// Return an object that can be used to get the state changes
+				return {
+					update : this.update.bind(this, table, sql)
+				};
+			});
 		});
 	}
 
@@ -139,12 +133,7 @@ class QueryWatcher {
 
 		return new Promise((resolve, reject) => {
 			self.client.query(update_sql, (error, result) => {
-				if(error) {
-					reject(error);
-				}
-				else {
-					resolve(result.rows);
-				}
+				error ? reject(error) : resolve(result.rows);
 			});
 		});
 	}

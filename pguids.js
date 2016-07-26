@@ -143,7 +143,7 @@ class PGUIDs {
 		});
 	}
 
-	// Add a composite key to a query
+	// Add meta columns to a query
 	addMetaColumns(sql) {
 		let self   = this;
 		let parsed = parser.parse(sql);
@@ -153,36 +153,40 @@ class PGUIDs {
 			return Promise.reject(parsed.error);
 		}
 
-		return new Promise((resolve, reject) => {
-			self.ensureObjects(tree).then((r) => {
-				try {
-					self._addMetaColumns(tree);
-					resolve(parser.deparse(tree));
-				}
-				catch(e) {
-					reject(e);
-				}
-			}, reject);
+		// Ensure that the necessary database objects have been created
+		return self.ensureObjects(tree).then(() => {
+			// Add the uid and rev columns to the parse tree
+			self._addMetaColumns(tree);
+
+			// Deparse the parse tree back into a query
+			return parser.deparse(tree);
 		});
 	}
 
+	// Add meta columns to a parse tree
 	_addMetaColumns(tree) {
 		let self = this;
 
 		for(let i in tree) {
 			let node = tree[i];
 
+			// If this is not an object, we are not interested in it
 			if(typeof node !== 'object') {
 				continue;
 			}
 
+			// Add some columns to select statements
 			if(node && node.SelectStmt) {
 				let select = node.SelectStmt;
 
 				if(select.fromClause) {
+					// Check if the columns need to be aggregated
 					let grouped = !!select.groupClause;
-					let tables  = this.getTables(select.fromClause, true, true);
 
+					// Get all the top-level tables in this select statement
+					let tables = this.getTables(select.fromClause, true, true);
+
+					// Create a node to select the aggregate revision
 					let rev_node = compositeRevNode(
 						tables,
 						grouped,
@@ -190,6 +194,7 @@ class PGUIDs {
 						self.output.rev
 					);
 
+					// Create a node to select the aggregate UID
 					let uid_node = compositeUidNode(
 						tables,
 						grouped,
@@ -202,6 +207,7 @@ class PGUIDs {
 				}
 			}
 
+			// Check the child nodes
 			this._addMetaColumns(node);
 		}
 	}
@@ -225,31 +231,25 @@ class PGUIDs {
 				${self.quote(col)} ${type} ${default_str}
 		`;
 
-		return new Promise((resolve, reject) => {
-			self.init.then((indexes) => {
-				let index = indexes[col] || {};
+		// Make sure the initial objects have been created
+		return self.init.then((indexes) => {
+			let index = indexes[col] || {};
 
-				if(!index[key]) {
-					index[key] = new Promise((resolve, reject) => {
-						self.client.query(alter_sql, (error, result) => {
-							if(error) {
-								reject(error);
-							}
-							else {
-								resolve(true);
-							}
-						});
+			if(!index[key]) {
+				index[key] = new Promise((resolve, reject) => {
+					self.client.query(alter_sql, (error, result) => {
+						error ? reject(error) : resolve(true);
 					});
-				}
+				});
+			}
 
-				index[key].then((created) => {
-					resolve({
-						table   : table,
-						column  : col,
-						created : created
-					});
-				}, reject);
-			}, reject);
+			return index[key].then((created) => {
+				return {
+					table   : table,
+					column  : col,
+					created : created
+				};
+			});
 		});
 	}
 
@@ -265,30 +265,24 @@ class PGUIDs {
 			FOR EACH ROW EXECUTE PROCEDURE ${self.quote(self.rev_func)}();
 		`;
 
-		return new Promise((resolve, reject) => {
-			self.init.then((indexes) => {
-				let index = indexes[self.rev_trig];
+		// Make sure the initial objects have been created
+		return self.init.then((indexes) => {
+			let index = indexes[self.rev_trig];
 
-				if(!index[key]) {
-					index[key] = new Promise((resolve, reject) => {
-						self.client.query(trigger_sql, (error, result) => {
-							if(error) {
-								reject(error);
-							}
-							else {
-								resolve(true);
-							}
-						});
+			if(!index[key]) {
+				index[key] = new Promise((resolve, reject) => {
+					self.client.query(trigger_sql, (error, result) => {
+						error ? reject(error) : resolve(true);
 					});
-				}
+				});
+			}
 
-				index[key].then((created) => {
-					resolve({
-						table   : table,
-						created : created
-					});
-				}, reject);
-			}, reject);
+			return index[key].then((created) => {
+				return {
+					table   : table,
+					created : created
+				};
+			});
 		});
 	}
 
@@ -297,31 +291,28 @@ class PGUIDs {
 		let self   = this;
 		let tables = this.getTables(tree);
 
-		let promises = [ self.uid_col, self.rev_col ].map((col) => {
-			let promises = [];
+		// Create the uid/rev columns
+		let cols = [ self.uid_col, self.rev_col ].map((col) => {
+			let cols = [];
 
 			for(let key in tables) {
-				promises.push(self.ensureCol(tables[key], col, key));
+				cols.push(self.ensureCol(tables[key], col, key));
 			}
 
-			return promises;
+			return cols;
 		}).reduce((p, c) => p.concat(c));
 
-		return new Promise((resolve, reject) => {
-			Promise.all(promises).then((col_results) => {
-				let promises = [];
+		// Create the rev triggers
+		let triggers = [];
 
-				for(let key in tables) {
-					promises.push(self.ensureTrigger(tables[key], key));
-				}
+		for(let key in tables) {
+			triggers.push(self.ensureTrigger(tables[key], key));
+		}
 
-				Promise.all(promises).then((trigger_results) => {
-					resolve({
-						columns  : col_results,
-						triggers : trigger_results
-					});
-				}, reject);
-			}, reject);
+		return Promise.all(cols).then((columns) => {
+			return Promise.all(triggers).then((triggers) => {
+				return { columns, triggers };
+			});
 		});
 	}
 
@@ -330,14 +321,17 @@ class PGUIDs {
 		let tables = {};
 
 		for(let i in tree) {
+			// If this node is not an object, we don't care about it
 			if(typeof tree[i] !== 'object') {
 				continue;
 			}
 
+			// If we're only getting top-level tables, ignore subqueries
 			if(top_level && i === 'SelectStmt') {
 				continue;
 			}
 
+			// If we're including tables from subselects and this is a subselect node
 			if(subselects && i === 'RangeSubselect') {
 				let table    = null;
 				let schema   = null;
@@ -347,6 +341,7 @@ class PGUIDs {
 				tables[key] = { table, schema, alias };
 			}
 
+			// If this is a table node
 			if(i === 'RangeVar') {
 				let table  = tree[i].relname;
 				let schema = tree[i].schemaname || this.schema;
