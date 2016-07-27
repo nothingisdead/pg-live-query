@@ -9,6 +9,18 @@ let pool = new Pool({
 	"password" : "password"
 });
 
+let t = null;
+
+(function update() {
+	t = Date.now();
+	pool.connect((error, client, done) => {
+		client.query('update foo set n = n + 1 where id % 1000 = 0', (error, result) => {
+			done();
+			setTimeout(update, 1000);
+		});
+	});
+}());
+
 pool.connect((error, client, done) => {
 	let watcher = new QueryWatcher(client);
 
@@ -16,30 +28,38 @@ pool.connect((error, client, done) => {
 		SELECT
 			greatest(1, 2, 3),
 			foo.*,
-			MIN(bar.id) as bid,
 			CONCAT(concat('a', 'b'), 'bar') as blah
 		FROM
-			foo LEFT JOIN
-			bar ON
-				foo.id = bar.id JOIN
-			(SELECT * FROM bar WHERE id > 1) bar2 ON
-				bar2.id = foo.id
-		GROUP BY foo.id
+			foo
+		WHERE
+			id % 100 = 0
 	`;
 
-	watcher.watch(sql).then((tracker) => {
-		(function update() {
-			tracker.update().then((r) => {
-				console.log(r.map(({ data, __id__, __rev__, __op__ }) => {
-					return { data, __id__, __rev__, __op__ };
-				}));
+	// Use this to compare against just running the query
+	(function update() {
+		client.query(sql, (error, result) => {
+			if(t) {
+				console.log(Date.now() - t);
+				t = null;
+			}
+			setTimeout(update, 1);
+		});
+	}());
 
-				setTimeout(update, 2000);
-			}, (e) => {
-				console.log(e);
-			});
-		}());
-	}, (e) => {
-		console.log(e);
-	});
+	// watcher.watch(sql).then((tracker) => {
+	// 	(function update() {
+	// 		console.time('qw');
+
+	// 		tracker.update().then((r) => {
+	// 			console.timeEnd('qw');
+	// 			console.log(r.length);
+
+	// 			setTimeout(update, 100);
+	// 		}, (e) => {
+	// 			console.log(e);
+	// 		});
+	// 	}());
+	// }, (e) => {
+	// 	console.log(e);
+	// });
 });

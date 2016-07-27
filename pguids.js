@@ -5,20 +5,18 @@ let indexes = {};
 
 class PGUIDs {
 	constructor(client, uid_col, rev_col, schema) {
-		let self = this;
+		this.client   = client;
+		this.uid_col  = uid_col || '__id__';
+		this.rev_col  = rev_col || '__rev__';
+		this.rev_seq  = `${this.rev_col}_sequence`;
+		this.rev_func = `${this.rev_col}_update`;
+		this.rev_trig = `${this.rev_col}_trigger`;
+		this.schema   = schema || 'public';
 
-		self.client   = client;
-		self.uid_col  = uid_col || '__id__';
-		self.rev_col  = rev_col || '__rev__';
-		self.rev_seq  = `${self.rev_col}_sequence`;
-		self.rev_func = `${self.rev_col}_update`;
-		self.rev_trig = `${self.rev_col}_trigger`;
-		self.schema   = schema || 'public';
-
-		self.output = {
-			uid : `${self.uid_col}'`,
-			rev : `${self.rev_col}'`,
-			seq : self.rev_seq
+		this.output = {
+			uid : `${this.uid_col}'`,
+			rev : `${this.rev_col}'`,
+			seq : this.rev_seq
 		};
 
 		// Get all the existing uid/rev columns
@@ -57,17 +55,17 @@ class PGUIDs {
 
 		let seq_sql = `
 			CREATE SEQUENCE IF NOT EXISTS
-				${self.quote(self.rev_seq)}
+				${this.quote(this.rev_seq)}
 			START WITH 1
 			INCREMENT BY 1
 		`;
 
 		let func_sql = `
-			CREATE OR REPLACE FUNCTION ${self.quote(self.rev_func)}()
+			CREATE OR REPLACE FUNCTION ${this.quote(this.rev_func)}()
 			RETURNS trigger AS $$
 				BEGIN
-					NEW.${self.quote(self.rev_col)} :=
-						nextval('${self.quote(self.rev_seq)}');
+					NEW.${this.quote(this.rev_col)} :=
+						nextval('${this.quote(this.rev_seq)}');
 					RETURN NEW;
 				END;
 			$$ LANGUAGE plpgsql
@@ -75,7 +73,7 @@ class PGUIDs {
 
 		this.init = new Promise((resolve, reject) => {
 			// Find which tables have the uid/rev columns already
-			let promises = [ self.uid_col, self.rev_col ].map((col) => {
+			let promises = [ this.uid_col, this.rev_col ].map((col) => {
 				return new Promise((resolve, reject) => {
 					client.query(col_sql, [ col ], (error, result) => {
 						if(error) {
@@ -97,7 +95,7 @@ class PGUIDs {
 
 			// Build the rev trigger index
 			promises.push(new Promise((resolve, reject) => {
-				client.query(trigger_sql, [ self.rev_trig ], (error, result) => {
+				client.query(trigger_sql, [ this.rev_trig ], (error, result) => {
 					if(error) {
 						reject(error);
 					}
@@ -130,7 +128,7 @@ class PGUIDs {
 
 			// Wait for all the promises
 			Promise.all(promises).then((results) => {
-				[ self.uid_col, self.rev_col, self.rev_trig ].forEach((type, i) => {
+				[ this.uid_col, this.rev_col, this.rev_trig ].forEach((type, i) => {
 					if(!indexes[type]) {
 						indexes[type] = {};
 					}
@@ -145,7 +143,6 @@ class PGUIDs {
 
 	// Add meta columns to a query
 	addMetaColumns(sql) {
-		let self   = this;
 		let parsed = parser.parse(sql);
 		let tree   = parsed.query;
 
@@ -154,9 +151,9 @@ class PGUIDs {
 		}
 
 		// Ensure that the necessary database objects have been created
-		return self.ensureObjects(tree).then(() => {
+		return this.ensureObjects(tree).then(() => {
 			// Add the uid and rev columns to the parse tree
-			self._addMetaColumns(tree);
+			this._addMetaColumns(tree);
 
 			// Deparse the parse tree back into a query
 			return parser.deparse(tree);
@@ -165,8 +162,6 @@ class PGUIDs {
 
 	// Add meta columns to a parse tree
 	_addMetaColumns(tree) {
-		let self = this;
-
 		for(let i in tree) {
 			let node = tree[i];
 
@@ -190,16 +185,16 @@ class PGUIDs {
 					let rev_node = compositeRevNode(
 						tables,
 						grouped,
-						self.rev_col,
-						self.output.rev
+						this.rev_col,
+						this.output.rev
 					);
 
 					// Create a node to select the aggregate UID
 					let uid_node = compositeUidNode(
 						tables,
 						grouped,
-						self.uid_col,
-						self.output.uid
+						this.uid_col,
+						this.output.uid
 					);
 
 					select.targetList.unshift(rev_node);
@@ -214,30 +209,29 @@ class PGUIDs {
 
 	// Create a column if it doesn't exist
 	ensureCol(table, col, key) {
-		let self        = this;
 		let default_str = '';
-		let type        = col === self.uid_col ? 'BIGSERIAL' : 'BIGINT';
+		let type        = col === this.uid_col ? 'BIGSERIAL' : 'BIGINT';
 
-		if(col === self.rev_col) {
+		if(col === this.rev_col) {
 			default_str = `
-				DEFAULT nextval('${self.quote(self.rev_seq)}')
+				DEFAULT nextval('${this.quote(this.rev_seq)}')
 			`;
 		}
 
 		let alter_sql = `
 			ALTER TABLE
-				${self.quote(table.schema)}.${self.quote(table.table)}
+				${this.quote(table.schema)}.${this.quote(table.table)}
 			ADD COLUMN
-				${self.quote(col)} ${type} ${default_str}
+				${this.quote(col)} ${type} ${default_str}
 		`;
 
 		// Make sure the initial objects have been created
-		return self.init.then((indexes) => {
+		return this.init.then((indexes) => {
 			let index = indexes[col] || {};
 
 			if(!index[key]) {
 				index[key] = new Promise((resolve, reject) => {
-					self.client.query(alter_sql, (error, result) => {
+					this.client.query(alter_sql, (error, result) => {
 						error ? reject(error) : resolve(true);
 					});
 				});
@@ -255,23 +249,21 @@ class PGUIDs {
 
 	// Make sure there is a trigger for this table
 	ensureTrigger(table, key) {
-		let self = this;
-
 		let trigger_sql = `
 			CREATE TRIGGER
-				${self.quote(self.rev_trig)}
+				${this.quote(this.rev_trig)}
 			BEFORE INSERT OR UPDATE ON
-				${self.quote(table.schema)}.${self.quote(table.table)}
-			FOR EACH ROW EXECUTE PROCEDURE ${self.quote(self.rev_func)}();
+				${this.quote(table.schema)}.${this.quote(table.table)}
+			FOR EACH ROW EXECUTE PROCEDURE ${this.quote(this.rev_func)}();
 		`;
 
 		// Make sure the initial objects have been created
-		return self.init.then((indexes) => {
-			let index = indexes[self.rev_trig];
+		return this.init.then((indexes) => {
+			let index = indexes[this.rev_trig];
 
 			if(!index[key]) {
 				index[key] = new Promise((resolve, reject) => {
-					self.client.query(trigger_sql, (error, result) => {
+					this.client.query(trigger_sql, (error, result) => {
 						error ? reject(error) : resolve(true);
 					});
 				});
@@ -288,15 +280,14 @@ class PGUIDs {
 
 	// Ensure that all the referenced tables have uid/rev columns/triggers
 	ensureObjects(tree) {
-		let self   = this;
 		let tables = this.getTables(tree);
 
 		// Create the uid/rev columns
-		let cols = [ self.uid_col, self.rev_col ].map((col) => {
+		let cols = [ this.uid_col, this.rev_col ].map((col) => {
 			let cols = [];
 
 			for(let key in tables) {
-				cols.push(self.ensureCol(tables[key], col, key));
+				cols.push(this.ensureCol(tables[key], col, key));
 			}
 
 			return cols;
@@ -306,7 +297,7 @@ class PGUIDs {
 		let triggers = [];
 
 		for(let key in tables) {
-			triggers.push(self.ensureTrigger(tables[key], key));
+			triggers.push(this.ensureTrigger(tables[key], key));
 		}
 
 		return Promise.all(cols).then((columns) => {
@@ -362,8 +353,12 @@ class PGUIDs {
 		return tables;
 	}
 
-	// Quote an Object Literal
-	quote(id) {
+	// Quote an Identifier/Literal
+	quote(id, literal) {
+		if(literal) {
+			return id.replace(/'/, "''");
+		}
+
 		return `"${id.replace(/"/, '""')}"`;
 	}
 }
@@ -384,33 +379,31 @@ function compositeUidNode(tables, grouped, uid_col, uid_col_p) {
 				let table_ref = [ table.alias ];
 			}
 
-			let col_ref = table_ref.concat([ uid_col ]);
-			let oid_ref = table_ref.concat([ 'tableoid' ]);
+			// Get the column reference node
+			let ref = table_ref.concat([ uid_col ]);
 
-			// Get the column reference nodes
-			let col_node = columnRefNode(col_ref);
-			let oid_node = castNode(columnRefNode(oid_ref), 'bigint');
-
-			// Get a composite node
-			node = arrayNode([ oid_node, col_node ]);
+			node = concatNode(columnRefNode(ref), constantNode('|'));
 		}
 		else {
 			// Aliased subqueries
 			let ref = [ table.alias, uid_col_p ];
 
 			// Get a reference to the subquery column
-			node = columnRefNode(ref);
+			node = concatNode(columnRefNode(ref), constantNode('|'));
 		}
 
 		// Aggregate the column if necessary
 		if(grouped) {
-			node = functionNode('array_agg', [ node ]);
+			node = functionNode('string_agg', [ node, constantNode('|') ]);
 		}
 
 		out.push(node);
 	}
 
-	return selectTargetNode(concatNodes(out), uid_col_p);
+	// Concatenate all the nodes together
+	out = concatNodes(out);
+
+	return selectTargetNode(out, uid_col_p);
 }
 
 // Helper function to generate a composite uid node
