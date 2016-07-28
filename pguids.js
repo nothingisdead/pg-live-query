@@ -156,7 +156,10 @@ class PGUIDs {
 			this._addMetaColumns(tree);
 
 			// Deparse the parse tree back into a query
-			return parser.deparse(tree);
+			return {
+				sql    : parser.deparse(tree),
+				tables : this.getTables(tree)
+			};
 		});
 	}
 
@@ -356,10 +359,10 @@ class PGUIDs {
 	// Quote an Identifier/Literal
 	quote(id, literal) {
 		if(literal) {
-			return id.replace(/'/, "''");
+			return id.replace(/'/g, "''");
 		}
 
-		return `"${id.replace(/"/, '""')}"`;
+		return `"${id.replace(/"/g, '""')}"`;
 	}
 }
 

@@ -14,15 +14,14 @@ let pool   = new Pool(settings);
 
 let t = null;
 
-(function update() {
-	t = Date.now();
-	pool.connect((error, client, done) => {
+pool.connect((error, client, done) => {
+	(function update() {
 		client.query('update foo set n = n + 1 where id % 1000 = 0', (error, result) => {
-			done();
+			t = Date.now();
 			setTimeout(update, 1000);
 		});
-	});
-}());
+	}());
+});
 
 liveDb.select(`
 	SELECT
@@ -32,13 +31,9 @@ liveDb.select(`
 	FROM
 		foo
 	WHERE
-		id % 100 = 0
+		id % 2 = 0
 `).on('update', function(diff, data) {
-	if(t) {
-		console.log(Date.now() - t);
-		t = null;
-	}
-	console.log(data.length);
+	console.log(Date.now() - t, data.length);
 });
 
 // pool.connect((error, client, done) => {

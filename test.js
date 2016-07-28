@@ -11,15 +11,14 @@ let pool = new Pool({
 
 let t = null;
 
-(function update() {
-	t = Date.now();
-	pool.connect((error, client, done) => {
+pool.connect((error, client, done) => {
+	(function update() {
 		client.query('update foo set n = n + 1 where id % 1000 = 0', (error, result) => {
-			done();
+			t = Date.now();
 			setTimeout(update, 1000);
 		});
-	});
-}());
+	}());
+});
 
 pool.connect((error, client, done) => {
 	let watcher = new QueryWatcher(client);
@@ -35,31 +34,45 @@ pool.connect((error, client, done) => {
 			id % 100 = 0
 	`;
 
-	// Use this to compare against just running the query
-	(function update() {
-		client.query(sql, (error, result) => {
-			if(t) {
-				console.log(Date.now() - t);
-				t = null;
-			}
-			setTimeout(update, 1);
+	let sql2 = `
+		SELECT
+			foo.*
+		FROM
+			foo JOIN
+			bar ON
+				foo.id = bar.id
+		WHERE
+			foo.n < bar.n
+	`;
+
+	// // Use this to compare against just running the query
+	// (function update() {
+	// 	client.query(sql, (error, result) => {
+	// 		if(t) {
+	// 			console.log(Date.now() - t);
+	// 			t = null;
+	// 		}
+	// 		setTimeout(update, 1);
+	// 	});
+	// }());
+
+	let handler = watcher.watch(sql);
+
+	handler
+		.on('data', (rows) => {
+			console.log(1, Date.now() - t, rows.length);
+		})
+		.on('error', (error) => {
+			console.log(error);
 		});
-	}());
 
-	// watcher.watch(sql).then((tracker) => {
-	// 	(function update() {
-	// 		console.time('qw');
+	let handler2 = watcher.watch(sql2);
 
-	// 		tracker.update().then((r) => {
-	// 			console.timeEnd('qw');
-	// 			console.log(r.length);
-
-	// 			setTimeout(update, 100);
-	// 		}, (e) => {
-	// 			console.log(e);
-	// 		});
-	// 	}());
-	// }, (e) => {
-	// 	console.log(e);
-	// });
+	handler2
+		.on('data', (rows) => {
+			console.log(2, Date.now() - t, rows.length);
+		})
+		.on('error', (error) => {
+			console.log(error);
+		});
 });

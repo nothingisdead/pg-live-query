@@ -1,7 +1,14 @@
-const PGUIDs = require('./pguids');
+const PGUIDs       = require('./pguids');
+const EventEmitter = require('events');
 
 // A counter for naming query tables
 let ctr = 0;
+
+// A queue for re-running queries
+let queue = [];
+
+// Keep track of which tables we've added triggers to
+let triggers = {};
 
 class QueryWatcher {
 	constructor(client) {
@@ -10,6 +17,18 @@ class QueryWatcher {
 		this.op_col  = '__op__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
+
+		this.client.query('LISTEN __qw__');
+
+		this.client.on('notification', (message) => {
+			let key = message.payload;
+
+			queue.forEach((item) => {
+				item.tables[key] && ++item.stale;
+			});
+
+			this.process();
+		});
 	}
 
 	// Get the selected columns from a sql statement
@@ -45,7 +64,7 @@ class QueryWatcher {
 	}
 
 	// Initialize a temporary table to keep track of state changes
-	init(sql) {
+	initializeQuery(sql) {
 		return new Promise((resolve, reject) => {
 			let table   = `__qw__${ctr++}`;
 			let i_table = this.quote(table);
@@ -63,25 +82,117 @@ class QueryWatcher {
 					error ? reject(error) : resolve([ table, cols ]);
 				});
 			});
-
 		});
+	}
+
+	// Create some triggers
+	createTriggers(tables) {
+		let promises = [];
+
+		for(let i in tables) {
+			if(triggers[i]) {
+				promises.push(triggers[i]);
+				continue;
+			}
+
+			let i_schema  = this.quote(tables[i].schema);
+			let i_table   = this.quote(tables[i].table);
+			let i_trigger = this.quote(`__qw__${i}`);
+			let l_key     = this.quote(i, true);
+
+			let drop_sql = `
+				DROP TRIGGER IF EXISTS
+					${i_trigger}
+				ON
+					${i_schema}.${i_table}
+			`;
+
+			let func_sql = `
+				CREATE OR REPLACE FUNCTION pg_temp.${i_trigger}()
+				RETURNS TRIGGER AS $$
+					BEGIN
+						EXECUTE pg_notify('__qw__', '${l_key}');
+					RETURN NULL;
+					END;
+				$$ LANGUAGE plpgsql
+			`;
+
+			let create_sql = `
+				CREATE TRIGGER
+					${i_trigger}
+				AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON
+					${i_schema}.${i_table}
+				EXECUTE PROCEDURE pg_temp.${i_trigger}()
+			`;
+
+			triggers[i] = new Promise((resolve, reject) => {
+				this.client.query(drop_sql, (error, result) => {
+					if(error) {
+						reject(error);
+					}
+					else {
+						this.client.query(func_sql, (error, result) => {
+							if(error) {
+								reject(error);
+							}
+							else {
+								this.client.query(create_sql, (error, result) => {
+									error ? reject(error) : resolve(result);
+								});
+							}
+						});
+					}
+				});
+			});
+
+			promises.push(triggers[i]);
+		}
+
+		return Promise.all(promises);
+	}
+
+	// Process the queue
+	process() {
+		// Sort the queue to put the stalest queries first
+		queue.sort((a, b) => b.stale - a.stale);
+
+		// Get the stalest item
+		let item = queue[0];
+
+		// If there are no (stale) items do nothing
+		if(!item || !item.stale) {
+			return;
+		}
+
+		// Update the item, then process the next one
+		item.update().then((rows) => {
+			// This item is now fresh
+			item.stale = 0;
+
+			// Emit a data event
+			item.handler.emit('data', rows);
+		}, (error) => {
+			// Emit an error event
+			item.handler.emit('error', error);
+		}).then(this.process);
 	}
 
 	// Watch for changes to query results
 	watch(sql) {
-		let rev = 0;
+		let handler = new EventEmitter();
 
-		// Make sure we have initialized the state change table
-		return this.init(sql).then(([ table, cols ]) => {
+		// Initialize the state change table
+		let promise = this.initializeQuery(sql).then(([ table, cols ]) => {
 			// Add the meta columns to this query
-			return this.uid.addMetaColumns(sql).then((sql) => {
-				// Create an update function for this query
-				let update = this.update.bind(this, table, cols, sql);
+			return this.uid.addMetaColumns(sql).then(({ sql, tables}) => {
+				// Watch the tables for changes
+				return this.createTriggers(tables).then(() => {
+					// Start tracking changes from the beginning
+					let rev = 0;
 
-				// Return an object that can be used to get the state changes
-				return {
-					update : () => {
-						return update(rev).then((rows) => {
+					// Create an update function for this query
+					let update = () => {
+						return this.update(table, cols, sql, rev).then((rows) => {
 							// Update the last revision
 							let tmp_rev = rows
 								.map((row) => row.__rev__)
@@ -91,10 +202,27 @@ class QueryWatcher {
 
 							return rows;
 						});
-					}
-				};
+					};
+
+					// Initialize the query as very "stale"
+					let stale = 100;
+
+					// Add this query to the queue
+					queue.push({ update, stale, tables, handler });
+
+					// Process the queue
+					this.process();
+				});
 			});
 		});
+
+		promise.then(() => {
+			handler.emit('ready');
+		}, (error) => {
+			handler.emit('error', error);
+		});
+
+		return handler;
 	}
 
 	// Update query state
