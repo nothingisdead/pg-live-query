@@ -21,7 +21,7 @@ pool.connect((error, client, done) => {
 });
 
 pool.connect((error, client, done) => {
-	let watcher = new QueryWatcher(client);
+	let watcher = new QueryWatcher(client, 'test_rep');
 
 	let sql = `
 		SELECT

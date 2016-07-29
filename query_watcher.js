@@ -11,12 +11,29 @@ let queue = [];
 let triggers = {};
 
 class QueryWatcher {
-	constructor(client) {
+	constructor(client, replication) {
 		this.uid_col = '__id__';
 		this.rev_col = '__rev__';
 		this.op_col  = '__op__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
+
+		// If replication settings were passed in, use them
+		if(replication) {
+			// Allow passing a simple string for default settings
+			if(typeof replication === 'string') {
+				replication = {
+					slot : replication
+				};
+			}
+
+			let settings = Object.assign({
+				client : this.client,
+				delay  : 1
+			}, replication);
+
+			this.watchReplicationSlot(settings);
+		}
 
 		this.client.query('LISTEN __qw__');
 
@@ -28,6 +45,43 @@ class QueryWatcher {
 			});
 
 			this.process();
+		});
+	}
+
+	// Helper function to watch a replication slot
+	watchReplicationSlot(settings) {
+		let sql = `
+			SELECT DISTINCT
+				to_json(ARRAY(
+					SELECT
+						quote_ident(unnest(regexp_matches(data, $1)))
+				))::text AS key
+			FROM
+				pg_logical_slot_get_changes($2, NULL, NULL)
+			WHERE
+				data LIKE 'table%'
+		`;
+
+		let pattern = '^table\\s(.+)\\.(.+):\\s(?:INSERT|UPDATE|DELETE)';
+
+		let params = [
+			pattern,
+			settings.slot
+		];
+
+		let next = this.watchReplicationSlot.bind(this, settings);
+
+		settings.client.query(sql, params, (error, result) => {
+			result.rows.forEach(({ key }) => {
+				queue.forEach((item) => {
+					item.tables[key] && ++item.stale;
+				});
+			});
+
+			this.process();
+
+			// Check again after the delay
+			setTimeout(next, settings.delay);
 		});
 	}
 
