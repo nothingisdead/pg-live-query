@@ -9,17 +9,6 @@ let pool = new Pool({
 	"password" : "password"
 });
 
-let t = null;
-
-pool.connect((error, client, done) => {
-	(function update() {
-		client.query('update foo set n = n + 1 where id % 1000 = 0', (error, result) => {
-			t = Date.now();
-			setTimeout(update, 1000);
-		});
-	}());
-});
-
 pool.connect((error, client, done) => {
 	let watcher = new QueryWatcher(client);
 
@@ -31,7 +20,7 @@ pool.connect((error, client, done) => {
 		FROM
 			foo
 		WHERE
-			id % 100 = 0
+			id % 2 = 0
 	`;
 
 	let sql2 = `
@@ -56,11 +45,17 @@ pool.connect((error, client, done) => {
 	// 	});
 	// }());
 
+	let t  = null;
+	let t2 = null;
+
 	let handler = watcher.watch(sql);
 
 	handler
-		.on('data', (rows) => {
-			console.log(1, Date.now() - t, rows.length);
+		.on('rows', (rows) => {
+			if(t) {
+				console.log(1, Date.now() - t, rows.length);
+				t = null;
+			}
 		})
 		.on('error', (error) => {
 			console.log(error);
@@ -69,10 +64,29 @@ pool.connect((error, client, done) => {
 	let handler2 = watcher.watch(sql2);
 
 	handler2
-		.on('data', (rows) => {
-			console.log(2, Date.now() - t, rows.length);
+		.on('rows', (rows) => {
+			if(t2) {
+				console.log(2, Date.now() - t2, rows.length);
+				t2 = null;
+			}
 		})
 		.on('error', (error) => {
 			console.log(error);
 		});
+
+	pool.connect((error, client, done) => {
+		(function update() {
+			client.query('update foo set n = n + 1 where id % 1000 = 0', (error, result) => {
+				if(!t) {
+					t = Date.now();
+				}
+
+				if(!t2) {
+					t2 = Date.now();
+				}
+
+				setTimeout(update, 1000);
+			});
+		}());
+	});
 });

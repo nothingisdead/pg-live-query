@@ -1,5 +1,6 @@
 const PGUIDs       = require('./pguids');
 const EventEmitter = require('events');
+const ROW_NUMBER   = Symbol('ROW_NUMBER');
 
 // A counter for naming query tables
 let ctr = 0;
@@ -15,6 +16,7 @@ class QueryWatcher {
 		this.uid_col = '__id__';
 		this.rev_col = '__rev__';
 		this.op_col  = '__op__';
+		this.rn_col  = '__rn__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
 
@@ -164,13 +166,43 @@ class QueryWatcher {
 			return;
 		}
 
-		// Update the item, then process the next one
-		item.update().then((rows) => {
-			// This item is now fresh
-			item.stale = 0;
+		// This item is now fresh
+		item.stale = 0;
 
+		// Update the item, then process the next one
+		item.update().then((changes) => {
 			// Emit a data event
-			item.handler.emit('data', rows);
+			item.handler.emit('changes', changes);
+
+			changes.forEach(({ c }) => {
+				if(c.data) {
+					let out = {};
+
+					// Set the row number symbol
+					out[ROW_NUMBER] = c.rn;
+
+					c.data.forEach((el, i) => {
+						out[item.cols[i]] = el;
+					});
+
+					item.state[c.id] = Object.freeze(out);
+				}
+				else {
+					delete item.state[c.id];
+				}
+			});
+
+			let rows = [];
+
+			for(let i in item.state) {
+				rows.push(item.state[i]);
+			}
+
+			rows.sort((a, b) => {
+				return a[ROW_NUMBER] - b[ROW_NUMBER];
+			});
+
+			item.handler.emit('rows', rows);
 		}, (error) => {
 			// Emit an error event
 			item.handler.emit('error', error);
@@ -204,11 +236,21 @@ class QueryWatcher {
 						});
 					};
 
-					// Initialize the query as very "stale"
-					let stale = 100;
+					// Initialize the query as stale
+					let stale = true;
+
+					// Initial state
+					let state = {};
 
 					// Add this query to the queue
-					queue.push({ update, stale, tables, handler });
+					queue.push({
+						update,
+						stale,
+						tables,
+						cols,
+						handler,
+						state
+					});
 
 					// Process the queue
 					this.process();
@@ -234,13 +276,19 @@ class QueryWatcher {
 		let i_rev     = this.quote(this.uid.output.rev);
 		let i_seq     = this.quote(this.uid.output.seq);
 		let i_uid_out = this.quote(this.uid_col);
-		let i_rev_out = this.quote(this.rev_col);
 		let i_op_out  = this.quote(this.op_col);
+		let i_rn_out  = this.quote(this.rn_col);
 		let i_cols    = cols.map((col) => `q.${this.quote(col)}`).join(',');
 
 		let update_sql = `
 			WITH
-				q AS (${sql}),
+				q AS (
+					SELECT
+						*,
+						ROW_NUMBER() OVER() AS ${i_rn_out}
+					FROM
+						(${sql}) t
+				),
 				u AS (
 					UPDATE ${i_table} SET
 						rev = q.${i_rev}
@@ -293,10 +341,11 @@ class QueryWatcher {
 						${i_table}.rev
 				)
 			SELECT
-				jsonb_build_array(${i_cols}) AS data,
-				md5(i.id) AS ${i_uid_out},
-				i.rev AS ${i_rev_out},
-				1 AS ${i_op_out}
+				jsonb_build_object(
+					'id', md5(i.id),
+					'rn', q.${i_rn_out},
+					'data', jsonb_build_array(${i_cols})
+				) AS c
 			FROM
 				i JOIN
 				q ON
@@ -305,10 +354,11 @@ class QueryWatcher {
 			UNION ALL
 
 			SELECT
-				jsonb_build_array(${i_cols}) AS data,
-				md5(u.id) AS ${i_uid_out},
-				u.rev AS ${i_rev_out},
-				2 AS ${i_op_out}
+				jsonb_build_object(
+					'id', md5(u.id),
+					'rn', q.${i_rn_out},
+					'data', jsonb_build_array(${i_cols})
+				) AS c
 			FROM
 				u JOIN
 				q ON
@@ -317,10 +367,9 @@ class QueryWatcher {
 			UNION ALL
 
 			SELECT
-				NULL AS data,
-				md5(d.id) AS ${i_uid_out},
-				d.rev AS ${i_rev_out},
-				3 AS ${i_op_out}
+				jsonb_build_object(
+					'id', md5(d.id)
+				) AS c
 			FROM
 				d
 		`;
