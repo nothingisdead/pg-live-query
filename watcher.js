@@ -1,29 +1,33 @@
 const PGUIDs       = require('./pguids');
 const EventEmitter = require('events');
-const ROW_NUMBER   = Symbol('ROW_NUMBER');
+const helpers      = require('./helpers');
+
+const EVENTS = {
+	1 : 'insert',
+	2 : 'update',
+	3 : 'delete'
+};
 
 // A counter for naming query tables
 let ctr = 0;
 
 // A queue for re-running queries
-let queue = [];
+const queue = [];
 
 // Keep track of which tables we've added triggers to
-let triggers = {};
+const triggers = {};
 
-class QueryWatcher {
-	constructor(client) {
-		this.uid_col = '__id__';
-		this.rev_col = '__rev__';
-		this.op_col  = '__op__';
-		this.rn_col  = '__rn__';
+class Watcher {
+	constructor(client, uid_col, rev_col) {
+		this.uid_col = uid_col || '__id__';
+		this.rev_col = rev_col || '__rev__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
 
 		this.client.query('LISTEN __qw__');
 
 		this.client.on('notification', (message) => {
-			let key = message.payload;
+			const key = message.payload;
 
 			queue.forEach((item) => {
 				item.tables[key] && ++item.stale;
@@ -35,12 +39,12 @@ class QueryWatcher {
 
 	// Get the selected columns from a sql statement
 	cols(sql) {
-		let meta = [
+		const meta = [
 			this.uid_col,
 			this.rev_col
 		];
 
-		let cols_sql = `
+		const cols_sql = `
 			SELECT
 				*
 			FROM
@@ -55,7 +59,7 @@ class QueryWatcher {
 					reject(error);
 				}
 				else {
-					let cols = result.fields
+					const cols = result.fields
 						.filter(({ name }) => meta.indexOf(name) === -1)
 						.map(({ name }) => name);
 
@@ -68,11 +72,11 @@ class QueryWatcher {
 	// Initialize a temporary table to keep track of state changes
 	initializeQuery(sql) {
 		return new Promise((resolve, reject) => {
-			let table   = `__qw__${ctr++}`;
-			let i_table = this.quote(table);
+			const table   = `__qw__${ctr++}`;
+			const i_table = helpers.quote(table);
 
 			// Create a table to keep track of state changes
-			let table_sql = `
+			const table_sql = `
 				CREATE TEMP TABLE ${i_table} (
 					id TEXT NOT NULL PRIMARY KEY,
 					rev BIGINT NOT NULL
@@ -89,27 +93,26 @@ class QueryWatcher {
 
 	// Create some triggers
 	createTriggers(tables) {
-		let promises = [];
+		const promises = [];
 
-		for(let i in tables) {
+		for(const i in tables) {
 			if(triggers[i]) {
 				promises.push(triggers[i]);
 				continue;
 			}
 
-			let i_schema  = this.quote(tables[i].schema);
-			let i_table   = this.quote(tables[i].table);
-			let i_trigger = this.quote(`__qw__${i}`);
-			let l_key     = this.quote(i, true);
+			const i_table   = helpers.tableRef(tables[i]);
+			const i_trigger = helpers.quote(`__qw__${i}`);
+			const l_key     = helpers.quote(i, true);
 
-			let drop_sql = `
+			const drop_sql = `
 				DROP TRIGGER IF EXISTS
 					${i_trigger}
 				ON
-					${i_schema}.${i_table}
+					${i_table}
 			`;
 
-			let func_sql = `
+			const func_sql = `
 				CREATE OR REPLACE FUNCTION pg_temp.${i_trigger}()
 				RETURNS TRIGGER AS $$
 					BEGIN
@@ -119,11 +122,11 @@ class QueryWatcher {
 				$$ LANGUAGE plpgsql
 			`;
 
-			let create_sql = `
+			const create_sql = `
 				CREATE TRIGGER
 					${i_trigger}
 				AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON
-					${i_schema}.${i_table}
+					${i_table}
 				EXECUTE PROCEDURE pg_temp.${i_trigger}()
 			`;
 
@@ -159,7 +162,7 @@ class QueryWatcher {
 		queue.sort((a, b) => b.stale - a.stale);
 
 		// Get the stalest item
-		let item = queue[0];
+		const item = queue[0];
 
 		// If there are no (stale) items do nothing
 		if(!item || !item.stale) {
@@ -171,50 +174,29 @@ class QueryWatcher {
 
 		// Update the item, then process the next one
 		item.update().then((changes) => {
-			// Emit a data event
-			item.handler.emit('changes', changes);
+			// Emit individual events and map the
+			// change rows to a more sensible format
+			changes = changes.map(({ c }) => {
+				// Emit an event for this change
+				item.handler.emit(EVENTS[c.op], c.id, c.data);
 
-			changes.forEach(({ c }) => {
-				if(c.data) {
-					let out = {};
-
-					// Set the row number symbol
-					out[ROW_NUMBER] = c.rn;
-
-					c.data.forEach((el, i) => {
-						out[item.cols[i]] = el;
-					});
-
-					item.state[c.id] = Object.freeze(out);
-				}
-				else {
-					delete item.state[c.id];
-				}
+				return c;
 			});
 
-			let rows = [];
-
-			for(let i in item.state) {
-				rows.push(item.state[i]);
-			}
-
-			rows.sort((a, b) => {
-				return a[ROW_NUMBER] - b[ROW_NUMBER];
-			});
-
-			item.handler.emit('rows', rows);
+			// Emit a 'changes' event
+			item.handler.emit('changes', changes, item.cols);
 		}, (error) => {
-			// Emit an error event
+			// Emit an 'error' event
 			item.handler.emit('error', error);
 		}).then(this.process);
 	}
 
 	// Watch for changes to query results
 	watch(sql) {
-		let handler = new EventEmitter();
+		const handler = new EventEmitter();
 
 		// Initialize the state change table
-		let promise = this.initializeQuery(sql).then(([ table, cols ]) => {
+		const promise = this.initializeQuery(sql).then(([ table, cols ]) => {
 			// Add the meta columns to this query
 			return this.uid.addMetaColumns(sql).then(({ sql, tables}) => {
 				// Watch the tables for changes
@@ -223,10 +205,10 @@ class QueryWatcher {
 					let rev = 0;
 
 					// Create an update function for this query
-					let update = () => {
+					const update = () => {
 						return this.update(table, cols, sql, rev).then((rows) => {
 							// Update the last revision
-							let tmp_rev = rows
+							const tmp_rev = rows
 								.map((row) => row.__rev__)
 								.reduce((p, c) => Math.max(p, c), 0);
 
@@ -237,10 +219,10 @@ class QueryWatcher {
 					};
 
 					// Initialize the query as stale
-					let stale = true;
+					const stale = true;
 
 					// Initial state
-					let state = {};
+					const state = {};
 
 					// Add this query to the queue
 					queue.push({
@@ -271,16 +253,15 @@ class QueryWatcher {
 	update(table, cols, sql, last_rev) {
 		last_rev = last_rev || 0;
 
-		let i_table   = this.quote(table);
-		let i_uid     = this.quote(this.uid.output.uid);
-		let i_rev     = this.quote(this.uid.output.rev);
-		let i_seq     = this.quote(this.uid.output.seq);
-		let i_uid_out = this.quote(this.uid_col);
-		let i_op_out  = this.quote(this.op_col);
-		let i_rn_out  = this.quote(this.rn_col);
-		let i_cols    = cols.map((col) => `q.${this.quote(col)}`).join(',');
+		const i_table   = helpers.quote(table);
+		const i_uid     = helpers.quote(this.uid.output.uid);
+		const i_rev     = helpers.quote(this.uid.output.rev);
+		const i_seq     = helpers.quote(this.uid.output.seq);
+		const i_uid_out = helpers.quote(this.uid_col);
+		const i_rn_out  = helpers.quote('~~~rn~~~');
+		const i_cols    = cols.map((col) => `q.${helpers.quote(col)}`).join(',');
 
-		let update_sql = `
+		const update_sql = `
 			WITH
 				q AS (
 					SELECT
@@ -343,6 +324,7 @@ class QueryWatcher {
 			SELECT
 				jsonb_build_object(
 					'id', md5(i.id),
+					'op', 1, -- INSERT
 					'rn', q.${i_rn_out},
 					'data', jsonb_build_array(${i_cols})
 				) AS c
@@ -356,6 +338,7 @@ class QueryWatcher {
 			SELECT
 				jsonb_build_object(
 					'id', md5(u.id),
+					'op', 2, -- UPDATE
 					'rn', q.${i_rn_out},
 					'data', jsonb_build_array(${i_cols})
 				) AS c
@@ -368,18 +351,19 @@ class QueryWatcher {
 
 			SELECT
 				jsonb_build_object(
-					'id', md5(d.id)
+					'id', md5(d.id),
+					'op', 3 -- DELETE
 				) AS c
 			FROM
 				d
 		`;
 
-		let update_query = {
+		const update_query = {
 			name : `__qw__${table}`,
 			text : update_sql
 		};
 
-		let params = [
+		const params = [
 			last_rev
 		];
 
@@ -389,11 +373,6 @@ class QueryWatcher {
 			});
 		});
 	}
-
-	// Helper function to quote identifiers
-	quote() {
-		return this.uid.quote.apply(this, arguments);
-	}
 }
 
-module.exports = QueryWatcher;
+module.exports = Watcher;
