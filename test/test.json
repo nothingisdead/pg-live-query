@@ -1,0 +1,97 @@
+{
+	"connection" : {
+		"host"     : "localhost",
+		"port"     : 5432,
+		"user"     : "postgres",
+		"database" : "test",
+		"password" : "password"
+	},
+
+	"tests" : [
+		{
+			"name" : "schema setup",
+
+			"setup" : [
+				"DROP SCHEMA IF EXISTS \"```\" CASCADE",
+				"CREATE SCHEMA \"```\"",
+				"SET search_path TO \"```\", public"
+			]
+		},
+		{
+			"name" : "simple select",
+
+			"setup" : [
+				"CREATE TABLE foo (id SERIAL, n BIGINT)"
+			],
+
+			"expect" : {
+				"query" : "SELECT * FROM foo",
+
+				"actions" : [
+					"INSERT INTO foo (n) VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10)"
+				],
+
+				"events" : [
+					["insert","[\"77529b68d130d125ff07a534a7b69adb\",[1,1],[\"id\",\"n\"]]"],
+					["insert","[\"43b864bde60564a9abad0598b1d5d203\",[2,2],[\"id\",\"n\"]]"],
+					["insert","[\"eec250c1ce93e1977f730c44dd8e5e4d\",[3,3],[\"id\",\"n\"]]"],
+					["insert","[\"f1c22ff9221315b236b258726e0ff098\",[4,4],[\"id\",\"n\"]]"],
+					["insert","[\"e6450fe1829d95134378cf3394e40b30\",[5,5],[\"id\",\"n\"]]"],
+					["insert","[\"e6dfb34595b5739e1fe7d5e9b35059cb\",[6,6],[\"id\",\"n\"]]"],
+					["insert","[\"3e436c6cf1e9b176c94d216b78af232d\",[7,7],[\"id\",\"n\"]]"],
+					["insert","[\"d4e1fe06d00680be89ee34f8d8357187\",[8,8],[\"id\",\"n\"]]"],
+					["insert","[\"2c6091ef6e058040872ce7cfe54a6997\",[9,9],[\"id\",\"n\"]]"],
+					["insert","[\"b2cb619eea9c80818b5e3197efd2bdd9\",[10,10],[\"id\",\"n\"]]"],
+					["rows","[[{\"id\":1,\"n\":1},{\"id\":2,\"n\":2},{\"id\":3,\"n\":3},{\"id\":4,\"n\":4},{\"id\":5,\"n\":5},{\"id\":6,\"n\":6},{\"id\":7,\"n\":7},{\"id\":8,\"n\":8},{\"id\":9,\"n\":9},{\"id\":10,\"n\":10}]]"],
+					["changes","[[{\"id\":\"77529b68d130d125ff07a534a7b69adb\",\"op\":1,\"rn\":1,\"data\":[1,1]},{\"id\":\"43b864bde60564a9abad0598b1d5d203\",\"op\":1,\"rn\":2,\"data\":[2,2]},{\"id\":\"eec250c1ce93e1977f730c44dd8e5e4d\",\"op\":1,\"rn\":3,\"data\":[3,3]},{\"id\":\"f1c22ff9221315b236b258726e0ff098\",\"op\":1,\"rn\":4,\"data\":[4,4]},{\"id\":\"e6450fe1829d95134378cf3394e40b30\",\"op\":1,\"rn\":5,\"data\":[5,5]},{\"id\":\"e6dfb34595b5739e1fe7d5e9b35059cb\",\"op\":1,\"rn\":6,\"data\":[6,6]},{\"id\":\"3e436c6cf1e9b176c94d216b78af232d\",\"op\":1,\"rn\":7,\"data\":[7,7]},{\"id\":\"d4e1fe06d00680be89ee34f8d8357187\",\"op\":1,\"rn\":8,\"data\":[8,8]},{\"id\":\"2c6091ef6e058040872ce7cfe54a6997\",\"op\":1,\"rn\":9,\"data\":[9,9]},{\"id\":\"b2cb619eea9c80818b5e3197efd2bdd9\",\"op\":1,\"rn\":10,\"data\":[10,10]}],[\"id\",\"n\"]]"]
+				]
+			},
+
+			"cleanup" : [
+				"DROP TABLE foo"
+			]
+		},
+		{
+			"name" : "select with join and group by",
+
+			"setup" : [
+				"CREATE TABLE foo (id SERIAL, n BIGINT)",
+				"CREATE TABLE bar (id SERIAL, n BIGINT)"
+			],
+
+			"expect" : {
+				"query" : "SELECT foo.n AS fn, AVG(bar.n) AS bn FROM foo JOIN bar ON foo.id = bar.id GROUP BY foo.n",
+
+				"actions" : [
+					"INSERT INTO foo (n) VALUES (1), (1), (2), (2), (2), (3), (4), (4), (4), (4)",
+					"INSERT INTO bar (n) VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10)",
+					null,
+					"UPDATE bar SET n = n + 1 WHERE id % 2 = 0"
+				],
+
+				"events" : [
+					["insert","[\"9e5bbe68e744d40a842cb098b7ad53a8\",[4,8.5],[\"fn\",\"bn\"]]"],
+					["insert","[\"3c7d0eabffcb1b22329f15b72ee2e0fb\",[1,1.5],[\"fn\",\"bn\"]]"],
+					["insert","[\"1eb2e3980fd1dca3b57e940f91d4a52d\",[3,6],[\"fn\",\"bn\"]]"],
+					["insert","[\"9ca726826af41065a87ceb7697dff921\",[2,4],[\"fn\",\"bn\"]]"],
+					["rows","[[{\"fn\":4,\"bn\":8.5},{\"fn\":1,\"bn\":1.5},{\"fn\":3,\"bn\":6},{\"fn\":2,\"bn\":4}]]"],
+					["changes","[[{\"id\":\"9e5bbe68e744d40a842cb098b7ad53a8\",\"op\":1,\"rn\":1,\"data\":[4,8.5]},{\"id\":\"3c7d0eabffcb1b22329f15b72ee2e0fb\",\"op\":1,\"rn\":2,\"data\":[1,1.5]},{\"id\":\"1eb2e3980fd1dca3b57e940f91d4a52d\",\"op\":1,\"rn\":3,\"data\":[3,6]},{\"id\":\"9ca726826af41065a87ceb7697dff921\",\"op\":1,\"rn\":4,\"data\":[2,4]}],[\"fn\",\"bn\"]]"],
+					["update","[\"9e5bbe68e744d40a842cb098b7ad53a8\",[4,9],[\"fn\",\"bn\"]]"],
+					["update","[\"3c7d0eabffcb1b22329f15b72ee2e0fb\",[1,2],[\"fn\",\"bn\"]]"],
+					["update","[\"1eb2e3980fd1dca3b57e940f91d4a52d\",[3,7],[\"fn\",\"bn\"]]"],
+					["update","[\"9ca726826af41065a87ceb7697dff921\",[2,4.333333333333333],[\"fn\",\"bn\"]]"],
+					["rows","[[{\"fn\":4,\"bn\":9},{\"fn\":1,\"bn\":2},{\"fn\":3,\"bn\":7},{\"fn\":2,\"bn\":4.333333333333333}]]"],
+					["changes","[[{\"id\":\"9e5bbe68e744d40a842cb098b7ad53a8\",\"op\":2,\"rn\":1,\"data\":[4,9]},{\"id\":\"3c7d0eabffcb1b22329f15b72ee2e0fb\",\"op\":2,\"rn\":2,\"data\":[1,2]},{\"id\":\"1eb2e3980fd1dca3b57e940f91d4a52d\",\"op\":2,\"rn\":3,\"data\":[3,7]},{\"id\":\"9ca726826af41065a87ceb7697dff921\",\"op\":2,\"rn\":4,\"data\":[2,4.333333333333333]}],[\"fn\",\"bn\"]]"]
+				]
+			}
+		},
+		{
+			"name" : "schema cleanup",
+
+			"cleanup" : [
+				"DROP SCHEMA IF EXISTS \"```\" CASCADE",
+				"SET search_path TO public"
+			]
+		}
+	]
+}

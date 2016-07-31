@@ -4,7 +4,7 @@
   "description": "Subscribe to query updates in PostgreSQL",
   "main": "index.js",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test/test.js"
   },
   "repository": {
     "type": "git",
@@ -26,7 +26,11 @@
   },
   "homepage": "https://github.com/nothingisdead/pg-live-query#readme",
   "dependencies": {
+    "bluebird": "^3.4.1",
     "pg": "^6.0.3",
     "pg-query-parser": "^0.1.0"
+  },
+  "devDependencies": {
+    "tap": "^6.3.0"
   }
 }

@@ -148,11 +148,15 @@ class Watcher {
 
 		// Update the item, then process the next one
 		item.update().then((changes) => {
+			if(!changes.length) {
+				return;
+			}
+
 			// Emit individual events and map the
 			// change rows to a more sensible format
 			changes = changes.map(({ c }) => {
 				// Emit an event for this change
-				item.handler.emit(EVENTS[c.op], c.id, c.data);
+				item.handler.emit(EVENTS[c.op], c.id, c.data, item.cols);
 
 				return c;
 			});
