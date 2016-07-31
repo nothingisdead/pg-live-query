@@ -14,15 +14,16 @@ let ctr = 0;
 // A queue for re-running queries
 const queue = [];
 
-// Keep track of which tables we've added triggers to
-const triggers = {};
-
 class Watcher {
 	constructor(client, uid_col, rev_col) {
 		this.uid_col = uid_col || '__id__';
 		this.rev_col = rev_col || '__rev__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
+
+		// Keep track of which tables we've added triggers
+		// to (currently not shared between instances)
+		this.triggers = {};
 
 		helpers.query(this.client, 'LISTEN __qw__');
 
@@ -87,7 +88,7 @@ class Watcher {
 		const promises = [];
 
 		for(const i in tables) {
-			if(!triggers[i]) {
+			if(!this.triggers[i]) {
 				const i_table   = helpers.tableRef(tables[i]);
 				const i_trigger = helpers.quote(`__qw__${i}`);
 				const l_key     = helpers.quote(i, true);
@@ -117,14 +118,14 @@ class Watcher {
 					EXECUTE PROCEDURE pg_temp.${i_trigger}()
 				`;
 
-				triggers[i] = helpers.queries(this.client, [
+				this.triggers[i] = helpers.queries(this.client, [
 					drop_sql,
 					func_sql,
 					create_sql
 				]);
 			}
 
-			promises.push(triggers[i]);
+			promises.push(this.triggers[i]);
 		}
 
 		return Promise.all(promises);
