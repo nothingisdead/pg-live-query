@@ -53,6 +53,7 @@ class PGUIDs {
 				t.tgname = $1
 		`;
 
+		// Check if the sequence exists
 		const seq_sql = `
 			CREATE SEQUENCE IF NOT EXISTS
 				${helpers.quote(this.rev_seq)}
@@ -60,6 +61,7 @@ class PGUIDs {
 			INCREMENT BY 1
 		`;
 
+		// Get all the existing revision functions
 		const func_sql = `
 			CREATE OR REPLACE FUNCTION ${helpers.quote(this.rev_func)}()
 			RETURNS trigger AS $$
@@ -72,95 +74,53 @@ class PGUIDs {
 		`;
 
 		// Get the current schema
-		const schema = new Promise((resolve, reject) => {
-			const schema_sql = `
-				SELECT current_schema
-			`;
+		const schema_sql = `
+			SELECT current_schema
+		`;
 
-			this.client.query(schema_sql, (error, result) => {
-				error ? reject(error) : resolve(result.rows[0].current_schema);
-			});
-		});
+		const state = helpers.queries(this.client, [
+			[ col_sql, [ this.uid_col ] ],
+			[ col_sql, [ this.rev_col ] ],
+			[ trigger_sql, [ this.rev_trig ] ],
+			seq_sql,
+			func_sql,
+			schema_sql
+		]);
 
-		this.init = schema.then((current_schema) => {
-			// Build the uid/rev column index
-			const promises = [ this.uid_col, this.rev_col ].map((col) => {
-				return new Promise((resolve, reject) => {
-					client.query(col_sql, [ col ], (error, result) => {
-						if(error) {
-							reject(error);
-						}
-						else {
-							// Build an index of fully-qualified table names
-							const index = {};
+		this.init = state.then((results) => {
+			const [
+				uid_result,
+				rev_result,
+				rev_trig_result,
+				seq_result,
+				func_result,
+				schema_result
+			] = results;
 
-							result.rows.forEach(({ schema, table }) => {
-								if(schema === current_schema) {
-									schema = null;
-								}
+			const current_schema = schema_result.rows[0].current_schema;
 
-								const key = JSON.stringify([ schema, table ]);
+			[
+				[ this.uid_col, uid_result ],
+				[ this.rev_col, rev_result ],
+				[ this.rev_trig, rev_trig_result ],
+			].forEach(([ i, result ]) => {
+				// Build an index of fully-qualified table names
+				const index = {};
 
-								index[key] = Promise.resolve(false);
-							});
-
-							resolve(index);
-						}
-					});
-				});
-			});
-
-			// Build the rev trigger index
-			promises.push(new Promise((resolve, reject) => {
-				client.query(trigger_sql, [ this.rev_trig ], (error, result) => {
-					if(error) {
-						reject(error);
-					}
-					else {
-						// Build an index of fully-qualified table names
-						const index = {};
-
-						result.rows.forEach(({ schema, table }) => {
-							if(schema === current_schema) {
-								schema = null;
-							}
-
-							const key = JSON.stringify([ schema, table ]);
-
-							index[key] = Promise.resolve(false);
-						});
-
-						resolve(index);
-					}
-				});
-			}));
-
-			// Create the rev sequence
-			promises.push(new Promise((resolve, reject) => {
-				client.query(seq_sql, (error, result) => {
-					error ? reject(error) : resolve();
-				});
-			}));
-
-			// Create the rev function
-			promises.push(new Promise((resolve, reject) => {
-				client.query(func_sql, (error, result) => {
-					error ? reject(error) : resolve();
-				});
-			}));
-
-			// Wait for all the promises
-			return Promise.all(promises).then((results) => {
-				[ this.uid_col, this.rev_col, this.rev_trig ].forEach((type, i) => {
-					if(!indexes[type]) {
-						indexes[type] = {};
+				result.rows.forEach(({ schema, table }) => {
+					if(schema === current_schema) {
+						schema = null;
 					}
 
-					Object.assign(indexes[type], results[i]);
+					const key = JSON.stringify([ schema, table ]);
+
+					index[key] = Promise.resolve(false);
 				});
 
-				return indexes;
+				indexes[i] = index;
 			});
+
+			return indexes;
 		});
 	}
 
@@ -253,11 +213,7 @@ class PGUIDs {
 			`;
 
 			if(!index[key]) {
-				index[key] = new Promise((resolve, reject) => {
-					this.client.query(alter_sql, (error, result) => {
-						error ? reject(error) : resolve(true);
-					});
-				});
+				index[key] = helpers.query(this.client, alter_sql);
 			}
 
 			return index[key].then((created) => {
@@ -285,11 +241,7 @@ class PGUIDs {
 			const index = indexes[this.rev_trig];
 
 			if(!index[key]) {
-				index[key] = new Promise((resolve, reject) => {
-					this.client.query(trigger_sql, (error, result) => {
-						error ? reject(error) : resolve(true);
-					});
-				});
+				index[key] = helpers.query(this.client, trigger_sql);
 			}
 
 			return index[key].then((created) => {
@@ -323,10 +275,13 @@ class PGUIDs {
 			triggers.push(this.ensureTrigger(tables[key], key));
 		}
 
-		return Promise.all(cols).then((columns) => {
-			return Promise.all(triggers).then((triggers) => {
-				return { columns, triggers };
-			});
+		const promises = [
+			Promise.all(cols),
+			Promise.all(triggers)
+		];
+
+		return Promise.all(promises).then(([ columns, triggers ]) => {
+			return { columns, triggers };
 		});
 	}
 

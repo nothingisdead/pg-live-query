@@ -1,4 +1,36 @@
-// Quote an Identifier/Literal =
+// Promise-ify a query
+const query = (client, query, params) => {
+	return  new Promise((resolve, reject) => {
+		const args = [ query ];
+
+		// Add the query parameters
+		if(params && params.length) {
+			args.push(params);
+		}
+
+		// Add a callback to resolve the promise
+		args.push((error, result) => {
+			error ? reject(error) : resolve(result);
+		});
+
+		client.query.apply(client, args);
+	});
+
+	return promise;
+};
+
+// Promise-ify multiple queries
+const queries = (client, queries) => {
+	return queries.reduce((p, c, i) => {
+		c = (c instanceof Array) ? c : [ c ];
+
+		return p.then((r) => {
+			return query(client, c[0], c[1]).then((next) => r.concat(next));
+		});
+	}, Promise.resolve([]));
+};
+
+// Quote an Identifier/Literal
 const quote = (str, literal) => {
 	if(literal) {
 		return str.replace(/'/g, "''");
@@ -26,7 +58,7 @@ const tableRef = (table, alias) => {
 };
 
 // Get a column reference node from a table/subquery
-function getColumnRefNode(table, col, alias_col) {
+const getColumnRefNode = (table, col, alias_col) => {
 	alias_col = alias_col || col;
 
 	const ref = [];
@@ -245,4 +277,4 @@ const nodes = {
 	compositeUidNode
 };
 
-module.exports = { quote, tableRef, nodes };
+module.exports = { query, queries, quote, tableRef, nodes };

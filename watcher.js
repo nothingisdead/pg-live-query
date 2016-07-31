@@ -24,7 +24,7 @@ class Watcher {
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
 
-		this.client.query('LISTEN __qw__');
+		helpers.query(this.client, 'LISTEN __qw__');
 
 		this.client.on('notification', (message) => {
 			const key = message.payload;
@@ -53,42 +53,33 @@ class Watcher {
 				0 = 1
 		`;
 
-		return new Promise((resolve, reject) => {
-			this.client.query(cols_sql, (error, result) => {
-				if(error) {
-					reject(error);
-				}
-				else {
-					const cols = result.fields
-						.filter(({ name }) => meta.indexOf(name) === -1)
-						.map(({ name }) => name);
-
-					resolve(cols);
-				}
+		return helpers.query(this.client, cols_sql)
+			.then((result) => {
+				return result.fields
+					.filter(({ name }) => meta.indexOf(name) === -1)
+					.map(({ name }) => name);
 			});
-		});
 	}
 
 	// Initialize a temporary table to keep track of state changes
 	initializeQuery(sql) {
-		return new Promise((resolve, reject) => {
-			const table   = `__qw__${ctr++}`;
-			const i_table = helpers.quote(table);
+		const table   = `__qw__${ctr++}`;
+		const i_table = helpers.quote(table);
 
-			// Create a table to keep track of state changes
-			const table_sql = `
-				CREATE TEMP TABLE ${i_table} (
-					id TEXT NOT NULL PRIMARY KEY,
-					rev BIGINT NOT NULL
-				)
-			`;
+		// Create a table to keep track of state changes
+		const table_sql = `
+			CREATE TEMP TABLE ${i_table} (
+				id TEXT NOT NULL PRIMARY KEY,
+				rev BIGINT NOT NULL
+			)
+		`;
 
-			this.cols(sql).then((cols) => {
-				this.client.query(table_sql, (error, result) => {
-					error ? reject(error) : resolve([ table, cols ]);
-				});
-			});
-		});
+		const promises = [
+			this.cols(sql),
+			helpers.query(this.client, table_sql)
+		];
+
+		return Promise.all(promises).then(([ cols ]) => [ table, cols ]);
 	}
 
 	// Create some triggers
@@ -96,59 +87,42 @@ class Watcher {
 		const promises = [];
 
 		for(const i in tables) {
-			if(triggers[i]) {
-				promises.push(triggers[i]);
-				continue;
+			if(!triggers[i]) {
+				const i_table   = helpers.tableRef(tables[i]);
+				const i_trigger = helpers.quote(`__qw__${i}`);
+				const l_key     = helpers.quote(i, true);
+
+				const drop_sql = `
+					DROP TRIGGER IF EXISTS
+						${i_trigger}
+					ON
+						${i_table}
+				`;
+
+				const func_sql = `
+					CREATE OR REPLACE FUNCTION pg_temp.${i_trigger}()
+					RETURNS TRIGGER AS $$
+						BEGIN
+							EXECUTE pg_notify('__qw__', '${l_key}');
+						RETURN NULL;
+						END;
+					$$ LANGUAGE plpgsql
+				`;
+
+				const create_sql = `
+					CREATE TRIGGER
+						${i_trigger}
+					AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON
+						${i_table}
+					EXECUTE PROCEDURE pg_temp.${i_trigger}()
+				`;
+
+				triggers[i] = helpers.queries(this.client, [
+					drop_sql,
+					func_sql,
+					create_sql
+				]);
 			}
-
-			const i_table   = helpers.tableRef(tables[i]);
-			const i_trigger = helpers.quote(`__qw__${i}`);
-			const l_key     = helpers.quote(i, true);
-
-			const drop_sql = `
-				DROP TRIGGER IF EXISTS
-					${i_trigger}
-				ON
-					${i_table}
-			`;
-
-			const func_sql = `
-				CREATE OR REPLACE FUNCTION pg_temp.${i_trigger}()
-				RETURNS TRIGGER AS $$
-					BEGIN
-						EXECUTE pg_notify('__qw__', '${l_key}');
-					RETURN NULL;
-					END;
-				$$ LANGUAGE plpgsql
-			`;
-
-			const create_sql = `
-				CREATE TRIGGER
-					${i_trigger}
-				AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON
-					${i_table}
-				EXECUTE PROCEDURE pg_temp.${i_trigger}()
-			`;
-
-			triggers[i] = new Promise((resolve, reject) => {
-				this.client.query(drop_sql, (error, result) => {
-					if(error) {
-						reject(error);
-					}
-					else {
-						this.client.query(func_sql, (error, result) => {
-							if(error) {
-								reject(error);
-							}
-							else {
-								this.client.query(create_sql, (error, result) => {
-									error ? reject(error) : resolve(result);
-								});
-							}
-						});
-					}
-				});
-			});
 
 			promises.push(triggers[i]);
 		}
@@ -195,49 +169,73 @@ class Watcher {
 	watch(sql) {
 		const handler = new EventEmitter();
 
-		// Initialize the state change table
-		const promise = this.initializeQuery(sql).then(([ table, cols ]) => {
-			// Add the meta columns to this query
-			return this.uid.addMetaColumns(sql).then(({ sql, tables}) => {
-				// Watch the tables for changes
-				return this.createTriggers(tables).then(() => {
-					// Start tracking changes from the beginning
-					let rev = 0;
+		const pre_init = [
+			this.initializeQuery(sql),
+			this.uid.addMetaColumns(sql)
+		];
 
-					// Create an update function for this query
-					const update = () => {
-						return this.update(table, cols, sql, rev).then((rows) => {
-							// Update the last revision
-							const tmp_rev = rows
-								.map((row) => row.__rev__)
-								.reduce((p, c) => Math.max(p, c), 0);
+		const post_init = Promise.all(pre_init).then((results) => {
+			const [
+				[ state_table, cols ],
+				{ sql, tables }
+			] = results;
 
-							rev = Math.max(rev, tmp_rev);
-
-							return rows;
-						});
-					};
-
-					// Initialize the query as stale
-					const stale = true;
-
-					// Initial state
-					const state = {};
-
-					// Add this query to the queue
-					queue.push({
-						update,
-						stale,
-						tables,
-						cols,
-						handler,
-						state
-					});
-
-					// Process the queue
-					this.process();
-				});
+			return this.createTriggers(tables).then(() => {
+				return {
+					state_table,
+					cols,
+					sql,
+					tables
+				};
 			});
+		});
+
+		const promise = post_init.then((results) => {
+			// Destructure all the results
+			const {
+				state_table,
+				cols,
+				sql,
+				tables
+			} = results;
+
+			// Start tracking changes from the beginning
+			let rev = 0;
+
+			// Create an update function specific to this query
+			const _update = this.update.bind(this, state_table, cols, sql);
+
+			const update = () => {
+				return _update(rev).then((rows) => {
+					// Update the last revision
+					const tmp_rev = rows
+						.map((row) => row.__rev__)
+						.reduce((p, c) => Math.max(p, c), 0);
+
+					rev = Math.max(rev, tmp_rev);
+
+					return rows;
+				});
+			};
+
+			// Initialize the query as stale
+			const stale = true;
+
+			// Initial state
+			const state = {};
+
+			// Add this query to the queue
+			queue.push({
+				update,
+				stale,
+				tables,
+				cols,
+				handler,
+				state
+			});
+
+			// Process the queue
+			this.process();
 		});
 
 		promise.then(() => {
@@ -253,6 +251,7 @@ class Watcher {
 	update(table, cols, sql, last_rev) {
 		last_rev = last_rev || 0;
 
+		// Quote a bunch of identifiers
 		const i_table   = helpers.quote(table);
 		const i_uid     = helpers.quote(this.uid.output.uid);
 		const i_rev     = helpers.quote(this.uid.output.rev);
@@ -261,6 +260,7 @@ class Watcher {
 		const i_rn_out  = helpers.quote('~~~rn~~~');
 		const i_cols    = cols.map((col) => `q.${helpers.quote(col)}`).join(',');
 
+		// Where all the magic happens
 		const update_sql = `
 			WITH
 				q AS (
@@ -367,10 +367,10 @@ class Watcher {
 			last_rev
 		];
 
-		return new Promise((resolve, reject) => {
-			this.client.query(update_query, params, (error, result) => {
-				error ? reject(error) : resolve(result.rows);
-			});
+		const promise = helpers.query(this.client, update_query, params);
+
+		return promise.then((result) => {
+			return result.rows;
 		});
 	}
 }
