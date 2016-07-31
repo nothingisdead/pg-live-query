@@ -26,7 +26,6 @@
   },
   "homepage": "https://github.com/nothingisdead/pg-live-query#readme",
   "dependencies": {
-    "bluebird": "^3.4.1",
     "pg": "^6.0.3",
     "pg-query-parser": "^0.1.0"
   },
