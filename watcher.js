@@ -70,7 +70,7 @@ class Watcher {
 		// Create a table to keep track of state changes
 		const table_sql = `
 			CREATE TEMP TABLE ${i_table} (
-				id TEXT NOT NULL PRIMARY KEY,
+				id TEXT NOT NULL,
 				rev BIGINT NOT NULL
 			)
 		`;
