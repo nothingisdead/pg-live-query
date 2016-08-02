@@ -1,6 +1,6 @@
 {
   "name": "pg-live-query",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "(Almost) realtime query update events in PostgreSQL",
   "main": "index.js",
   "scripts": {
@@ -26,10 +26,10 @@
   },
   "homepage": "https://github.com/nothingisdead/pg-live-query#readme",
   "dependencies": {
-    "pg": "^6.0.3",
     "pg-query-parser": "^0.1.0"
   },
   "devDependencies": {
+    "pg": "^6.0.3",
     "tap": "^6.3.0"
   }
 }

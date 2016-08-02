@@ -328,7 +328,7 @@ class Watcher {
 				)
 			SELECT
 				jsonb_build_object(
-					'id', md5(i.id),
+					'id', i.id,
 					'op', 1, -- INSERT
 					'rn', q.${i_rn_out},
 					'data', jsonb_build_array(${i_cols})
@@ -342,7 +342,7 @@ class Watcher {
 
 			SELECT
 				jsonb_build_object(
-					'id', md5(u.id),
+					'id', u.id,
 					'op', 2, -- UPDATE
 					'rn', q.${i_rn_out},
 					'data', jsonb_build_array(${i_cols})
@@ -356,7 +356,7 @@ class Watcher {
 
 			SELECT
 				jsonb_build_object(
-					'id', md5(d.id),
+					'id', d.id,
 					'op', 3 -- DELETE
 				) AS c
 			FROM
