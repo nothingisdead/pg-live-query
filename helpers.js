@@ -90,18 +90,19 @@ const compositeUidNode = (tables, grouped, uid_col, uid_col_p) => {
 		let node = getColumnRefNode(table, uid_col, uid_col_p);
 
 		// Append a separator character
-		node = concatNode(node, constantNode('|'));
+		node = functionNode('int8send', [ node ]);
 
 		// Aggregate the column if necessary
 		if(grouped) {
 			node = functionNode('string_agg', [ node, constantNode('|') ]);
+			node = functionNode('md5', [ node ]);
 		}
 
 		out.push(node);
 	}
 
 	// Concatenate all the nodes together
-	out = concatNodes(out);
+	out = functionNode('md5', [ exprNodes(out, '||') ]);
 
 	return selectTargetNode(out, uid_col_p);
 }
@@ -233,17 +234,17 @@ const minmaxNode = (nodes, mode) => {
 	};
 }
 
-// Goncatenate multiple nodes ('||')
-const concatNodes = (nodes) => {
+// Generate multiple expression nodes
+const exprNodes = (nodes, op) => {
 	if(nodes.length === 1) {
 		return nodes[0];
 	}
 
-	return concatNode(nodes.shift(), concatNodes(nodes));
+	return exprNode(nodes.shift(), op, exprNodes(nodes, op));
 }
 
-// Generate a concat node ('||')
-const concatNode = (lnode, rnode) => {
+// Generate an expression node
+const exprNode = (lnode, op, rnode) => {
 	return {
 		A_Expr : {
 			kind : 0,
@@ -251,7 +252,7 @@ const concatNode = (lnode, rnode) => {
 			name : [
 				{
 					String : {
-						str : '||'
+						str : op
 					}
 				}
 			],
