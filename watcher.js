@@ -36,7 +36,7 @@ class Watcher {
 				item.tables[key] && ++item.stale;
 			});
 
-			watcher.process();
+			watcher.process().bind(watcher);
 		});
 	}
 
