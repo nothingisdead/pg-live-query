@@ -20,7 +20,7 @@ class Watcher {
 		this.rev_col = rev_col || '__rev__';
 		this.uid     = new PGUIDs(client, this.uid_col, this.rev_col);
 		this.client  = client;
-
+		this.process = this.process.bind(this)
 		// Keep track of which tables we've added triggers
 		// to (currently not shared between instances)
 		this.triggers = {};
@@ -36,7 +36,7 @@ class Watcher {
 				item.tables[key] && ++item.stale;
 			});
 
-			watcher.process().bind(watcher);
+			watcher.process();
 		});
 	}
 
