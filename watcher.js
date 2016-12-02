@@ -28,16 +28,16 @@ class Watcher {
 		helpers.query(this.client, 'LISTEN __qw__').catch((err) => {
 			console.error("watcher listen -29", err)
 		});
-
-		this.client.on('notification', ((message) => {
+		const watcher = this;
+		this.client.on('notification', (message) => {
 			const key = message.payload;
 
 			queue.forEach((item) => {
 				item.tables[key] && ++item.stale;
 			});
 
-			this.process();
-		}).bind(this));
+			watcher.process();
+		});
 	}
 
 	// Get the selected columns from a sql statement
