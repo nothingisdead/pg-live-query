@@ -29,7 +29,7 @@ class Watcher {
 			console.error("watcher listen -29", err)
 		});
 
-		this.client.on('notification', function(message) {
+		this.client.on('notification', ((message) => {
 			const key = message.payload;
 
 			queue.forEach((item) => {
@@ -37,7 +37,7 @@ class Watcher {
 			});
 
 			this.process();
-		});
+		}).bind(this));
 	}
 
 	// Get the selected columns from a sql statement
