@@ -25,9 +25,11 @@ class Watcher {
 		// to (currently not shared between instances)
 		this.triggers = {};
 
-		helpers.query(this.client, 'LISTEN __qw__');
+		helpers.query(this.client, 'LISTEN __qw__').catch((err) => {
+			console.error("watcher listen -29", err)
+		});
 
-		this.client.on('notification', (message) => {
+		this.client.on('notification', function(message) {
 			const key = message.payload;
 
 			queue.forEach((item) => {
@@ -59,6 +61,8 @@ class Watcher {
 				return result.fields
 					.filter(({ name }) => meta.indexOf(name) === -1)
 					.map(({ name }) => name);
+			}).catch((err) => {
+				console.error("get sql from selected", err)
 			});
 	}
 
@@ -80,7 +84,9 @@ class Watcher {
 			helpers.query(this.client, table_sql)
 		];
 
-		return Promise.all(promises).then(([ cols ]) => [ table, cols ]);
+		return Promise.all(promises).then(([ cols ]) => [ table, cols ]).catch((err) => {
+			console.error("watcher, initialize query ", err);
+		});
 	}
 
 	// Create some triggers
@@ -128,7 +134,9 @@ class Watcher {
 			promises.push(this.triggers[i]);
 		}
 
-		return Promise.all(promises);
+		return Promise.all(promises).catch((err) => {
+			console.error(err);
+		});
 	}
 
 	// Process the queue
@@ -167,7 +175,9 @@ class Watcher {
 		}, (error) => {
 			// Emit an 'error' event
 			item.handler.emit('error', error);
-		}).then(this.process);
+		}).then(this.process).catch((err) => {
+			console.error("raw error in process queue", err)
+		});
 	}
 
 	// Watch for changes to query results
@@ -309,8 +319,8 @@ class Watcher {
 						rev
 					)
 					SELECT
-						${i_uid},
-						${i_rev}
+						q.${i_uid},
+						q.${i_rev}
 					FROM
 						q
 					WHERE
@@ -372,7 +382,9 @@ class Watcher {
 			last_rev
 		];
 
-		const promise = helpers.query(this.client, update_query, params);
+		const promise = helpers.query(this.client, update_query, params).catch((err) => {
+			console.error("update query state", err)
+		});
 
 		return promise.then((result) => {
 			return result.rows;
