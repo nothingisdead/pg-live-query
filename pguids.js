@@ -314,7 +314,7 @@ class PGUIDs {
 			if(i === 'RangeVar') {
 				const table  = tree[i].relname;
 				const schema = tree[i].schemaname || null;
-				const alias  = null;
+				let alias  = null;
 				const key    = JSON.stringify([ schema, table ]);
 
 				if(tree[i].alias) {
