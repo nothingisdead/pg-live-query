@@ -14,8 +14,8 @@ class PGUIDs {
 		this.rev_trig = `${this.rev_col}_trigger`;
 
 		this.output = {
-			uid : `${this.uid_col}'`,
-			rev : `${this.rev_col}'`,
+			uid : `${this.uid_col}`,
+			rev : `${this.rev_col}`,
 			seq : this.rev_seq
 		};
 
@@ -213,7 +213,9 @@ class PGUIDs {
 			`;
 
 			if(!index[key]) {
-				index[key] = helpers.query(this.client, alter_sql);
+				index[key] = helpers.query(this.client, alter_sql).catch((err) => {
+					console.error("ensure col - pguid -217", err)
+				});
 			}
 
 			return index[key].then((created) => {
@@ -241,7 +243,9 @@ class PGUIDs {
 			const index = indexes[this.rev_trig];
 
 			if(!index[key]) {
-				index[key] = helpers.query(this.client, trigger_sql);
+				index[key] = helpers.query(this.client, trigger_sql).catch((err) => {
+					console.error("ensure trigger - pguid -247", err)
+				});
 			}
 
 			return index[key].then((created) => {
@@ -282,6 +286,8 @@ class PGUIDs {
 
 		return Promise.all(promises).then(([ columns, triggers ]) => {
 			return { columns, triggers };
+		}).catch((err) => {
+			console.error(err);
 		});
 	}
 
@@ -314,7 +320,7 @@ class PGUIDs {
 			if(i === 'RangeVar') {
 				const table  = tree[i].relname;
 				const schema = tree[i].schemaname || null;
-				const alias  = null;
+				let alias  = null;
 				const key    = JSON.stringify([ schema, table ]);
 
 				if(tree[i].alias) {
