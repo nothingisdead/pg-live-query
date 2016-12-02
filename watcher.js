@@ -141,6 +141,7 @@ class Watcher {
 
 	// Process the queue
 	process() {
+		const watcher = this
 		// Sort the queue to put the stalest queries first
 		queue.sort((a, b) => b.stale - a.stale);
 
@@ -175,7 +176,7 @@ class Watcher {
 		}, (error) => {
 			// Emit an 'error' event
 			item.handler.emit('error', error);
-		}).then(this.process).catch((err) => {
+		}).then(watcher.process).catch((err) => {
 			console.error("raw error in process queue", err)
 		});
 	}
